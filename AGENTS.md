@@ -1,0 +1,1 @@
+- Require a validated signed-in session at both the dashboard and signal endpoint, with trade rows readable only to authenticated users, so public visitors cannot view or retrieve proprietary signals.

@@ -1,0 +1,232 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+All colors MUST be HSL.
+*/
+
+@layer base {
+  :root {
+    /* Trading-desk dark theme — deeper, cooler base for a sleek look */
+    --background: 222 26% 6%;
+    --foreground: 210 20% 92%;
+
+    --card: 222 22% 9%;
+    --card-foreground: 210 20% 92%;
+
+    --popover: 222 22% 9%;
+    --popover-foreground: 210 20% 92%;
+
+    --primary: 40 78% 52%;
+    --primary-foreground: 222 30% 8%;
+
+    --secondary: 222 18% 12%;
+    --secondary-foreground: 210 20% 92%;
+
+    --muted: 222 18% 12%;
+    --muted-foreground: 215 12% 58%;
+
+    --accent: 222 18% 14%;
+    --accent-foreground: 210 20% 92%;
+
+    --destructive: 0 78% 58%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 222 16% 15%;
+    --input: 222 16% 15%;
+    --ring: 40 78% 52%;
+
+    --radius: 0.625rem;
+
+    /* Trading semantic tokens */
+    --bull: 152 58% 45%;
+    --bull-foreground: 0 0% 100%;
+    --bull-glow: 152 60% 52%;
+
+    --bear: 2 66% 56%;
+    --bear-foreground: 0 0% 100%;
+    --bear-glow: 2 70% 62%;
+
+    --neutral: 215 12% 58%;
+
+    --gold: 40 78% 55%;
+    --gold-glow: 42 82% 62%;
+
+    --surface-1: 222 22% 9%;
+    --surface-2: 222 20% 12%;
+    --surface-3: 222 18% 16%;
+
+    /* Gradients — restrained, desk-grade. No candy highlights. */
+    --gradient-bull: linear-gradient(135deg, hsl(152 60% 40%), hsl(165 55% 34%));
+    --gradient-bear: linear-gradient(135deg, hsl(2 62% 50%), hsl(352 58% 44%));
+    --gradient-gold: linear-gradient(135deg, hsl(40 78% 52%), hsl(36 70% 44%));
+    --gradient-surface: linear-gradient(180deg, hsl(222 22% 9%), hsl(222 26% 6%));
+
+    /* Ambient background — a single low, wide light source plus a deep
+       vignette. Mature and quiet rather than multi-coloured. */
+    --gradient-ambient:
+      radial-gradient(ellipse 120% 70% at 50% -20%, hsl(40 60% 50% / 0.055), transparent 65%),
+      radial-gradient(ellipse 90% 60% at 50% 110%, hsl(222 40% 2% / 0.85), transparent 70%);
+
+    /* Hairline grid overlay — barely-there terminal texture */
+    --pattern-grid:
+      linear-gradient(hsl(210 30% 96% / 0.014) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(210 30% 96% / 0.014) 1px, transparent 1px);
+
+    /* Shadows — thin top highlight, long soft drop */
+    --shadow-card:
+      0 1px 0 0 hsl(0 0% 100% / 0.03) inset,
+      0 0 0 1px hsl(0 0% 0% / 0.35),
+      0 18px 40px -28px hsl(0 0% 0% / 0.9);
+    --shadow-bull: 0 0 22px -8px hsl(var(--bull-glow) / 0.35);
+    --shadow-bear: 0 0 22px -8px hsl(var(--bear-glow) / 0.35);
+    --shadow-gold: 0 0 26px -10px hsl(var(--gold-glow) / 0.38);
+
+    --transition-smooth: all 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+
+
+    --sidebar-background: 0 0% 98%;
+
+    --sidebar-foreground: 240 5.3% 26.1%;
+
+    --sidebar-primary: 240 5.9% 10%;
+
+    --sidebar-primary-foreground: 0 0% 98%;
+
+    --sidebar-accent: 240 4.8% 95.9%;
+
+    --sidebar-accent-foreground: 240 5.9% 10%;
+
+    --sidebar-border: 220 13% 91%;
+
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 210 40% 98%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 212.7 26.8% 83.9%;
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html, body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "cv11", "ss01", "tnum";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    letter-spacing: -0.005em;
+  }
+
+  /* Layered sleek background:
+     - body paints the ambient color spotlights (fixed so they stay put on scroll)
+     - body::before paints a faint grid overlay that fades toward the edges
+     Both stay behind all content via z-index. */
+  body {
+    background-image: var(--gradient-ambient);
+    background-attachment: fixed;
+    background-color: hsl(var(--background));
+    position: relative;
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background-image: var(--pattern-grid);
+    background-size: 72px 72px;
+    -webkit-mask-image: radial-gradient(ellipse 80% 70% at 50% 40%, hsl(0 0% 0% / 0.9), transparent 80%);
+    mask-image: radial-gradient(ellipse 80% 70% at 50% 40%, hsl(0 0% 0% / 0.9), transparent 80%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Lift app content above the background layers */
+  #root {
+    position: relative;
+    z-index: 1;
+  }
+}
+
+@layer utilities {
+  .text-bull { color: hsl(var(--bull)); }
+  .text-bear { color: hsl(var(--bear)); }
+  .text-gold { color: hsl(var(--gold)); }
+  .bg-bull { background-color: hsl(var(--bull)); }
+  .bg-bear { background-color: hsl(var(--bear)); }
+  .bg-bull\/10 { background-color: hsl(var(--bull) / 0.1); }
+  .bg-bear\/10 { background-color: hsl(var(--bear) / 0.1); }
+  .border-bull\/30 { border-color: hsl(var(--bull) / 0.3); }
+  .border-bear\/30 { border-color: hsl(var(--bear) / 0.3); }
+  .shadow-bull { box-shadow: var(--shadow-bull); }
+  .shadow-bear { box-shadow: var(--shadow-bear); }
+  .shadow-gold { box-shadow: var(--shadow-gold); }
+  .gradient-bull { background-image: var(--gradient-bull); }
+  .gradient-bear { background-image: var(--gradient-bear); }
+  .gradient-gold { background-image: var(--gradient-gold); }
+  .surface-1 { background-color: hsl(var(--surface-1)); }
+  .surface-2 { background-color: hsl(var(--surface-2)); }
+  .surface-3 { background-color: hsl(var(--surface-3)); }
+  .shadow-card-elev { box-shadow: var(--shadow-card); }
+
+  .pulse-dot {
+    position: relative;
+  }
+  .pulse-dot::before {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border-radius: 9999px;
+    background: hsl(var(--bull) / 0.4);
+    animation: pulse-ring 1.6s ease-out infinite;
+  }
+  @keyframes pulse-ring {
+    0% { transform: scale(0.6); opacity: 1; }
+    100% { transform: scale(1.6); opacity: 0; }
+  }
+
+  .fade-in-up {
+    animation: fade-in-up 0.4s cubic-bezier(0.4, 0, 0.2, 1) both;
+  }
+  @keyframes fade-in-up {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+}

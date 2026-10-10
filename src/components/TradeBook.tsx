@@ -1,0 +1,436 @@
+import { useCallback, useEffect, useState } from "react";
+import { supabase } from "@/integrations/supabase/client";
+import { ArrowDown, ArrowUp, BookOpen, CheckCircle2, XCircle, Clock } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { toast } from "sonner";
+
+interface Trade {
+  id: string;
+  pair: string;
+  direction: "BUY" | "SELL";
+  entry: number;
+  stop_loss: number;
+  take_profit: number;
+  risk_reward: number;
+  confidence: number;
+  structure: string;
+  status: "open" | "win" | "loss";
+  opened_at: string;
+  closed_at: string | null;
+  close_price: number | null;
+  initial_stop_loss: number | null;
+  protection_active: boolean;
+  tp1_hit?: boolean;
+}
+
+interface TradeBookProps {
+  /** Map of pair -> latest scanned price, used to mark-to-market open trades. */
+  priceMap?: Record<string, number>;
+}
+
+export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
+  const [trades, setTrades] = useState<Trade[]>([]);
+  const [closedTrades, setClosedTrades] = useState<Trade[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const refreshTrades = useCallback(async () => {
+    const [openRes, closedRes] = await Promise.all([
+      supabase
+        .from("trades")
+        .select("*")
+        .eq("status", "open")
+        .order("opened_at", { ascending: false }),
+      supabase
+        .from("trades")
+        .select("*")
+        .neq("status", "open")
+        .order("closed_at", { ascending: false })
+        .limit(1000),
+    ]);
+    if (!openRes.error && openRes.data) setTrades(openRes.data as Trade[]);
+    if (!closedRes.error && closedRes.data) setClosedTrades(closedRes.data as Trade[]);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    refreshTrades();
+
+    // Re-load on tab focus so SL/TP fills are reflected immediately when
+    // the user returns to the app.
+    const onFocus = () => refreshTrades();
+    window.addEventListener("focus", onFocus);
+
+    // Realtime updates
+    const channel = supabase
+      .channel("trades-changes")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "trades" },
+        (payload) => {
+          const oldTrade = payload.old as Partial<Trade>;
+          const newTrade = payload.new as Partial<Trade>;
+          if (oldTrade.status === "open" && newTrade.status && newTrade.status !== "open") {
+            toast(newTrade.status === "win" ? "Trade closed in profit" : "Trade closed at a loss", {
+              description: `${newTrade.pair ?? "Trade"} · closed at ${newTrade.close_price ?? "market"}${
+                newTrade.closed_at ? ` · ${new Date(newTrade.closed_at).toLocaleString()}` : ""
+              }`,
+            });
+          }
+          void refreshTrades();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [refreshTrades]);
+
+
+  // Live SL/TP guard: when the latest scanned price crosses an open trade's
+  // SL or TP, close it client-side immediately so the book never lags the chart.
+  // The backend resolver still reconciles authoritatively on the next scan.
+  useEffect(() => {
+    for (const t of trades) {
+      if (t.status !== "open") continue;
+      const px = priceMap[t.pair];
+      if (px == null) continue;
+      const isBuy = t.direction === "BUY";
+      const sl = Number(t.stop_loss);
+      const tp = Number(t.take_profit);
+      const hitSL = isBuy ? px <= sl : px >= sl;
+      const hitTP = isBuy ? px >= tp : px <= tp;
+      if (!hitSL && !hitTP) continue;
+
+      // Worst case: SL wins ties. After TP1, BE-stop is a scratch win.
+      const status: "win" | "loss" = hitSL ? (t.tp1_hit || t.protection_active ? "win" : "loss") : "win";
+      const closePrice = hitSL ? sl : tp;
+      const closedAt = new Date().toISOString();
+
+      supabase
+        .from("trades")
+        .update({ status, close_price: closePrice, closed_at: closedAt })
+        .eq("id", t.id)
+        .eq("status", "open")
+        .then(({ error }) => {
+          if (!error) {
+            setTrades((prev) =>
+              prev.map((x) =>
+                x.id === t.id ? { ...x, status, close_price: closePrice, closed_at: closedAt } : x,
+              ),
+            );
+            void refreshTrades();
+          }
+        });
+    }
+  }, [trades, priceMap, refreshTrades]);
+
+  const openTrades = trades.filter((t) => t.status === "open");
+  const closed = closedTrades;
+  const wins = closed.filter((t) => t.status === "win").length;
+  const losses = closed.filter((t) => t.status === "loss").length;
+  const open = openTrades.length;
+  const winRate = closed.length ? Math.round((wins / closed.length) * 100) : 0;
+  // Realized R uses the actual fill price when we have it, so break-even exits
+  // score ~0R instead of being counted as a full-target win.
+  const totalR = closed.reduce((acc, t) => {
+    const realized = realizedR(t);
+    return acc + realized;
+  }, 0);
+
+
+  // Unrealized R across all currently-open trades (mark-to-market).
+  const openPnl = openTrades.reduce((acc, t) => {
+    const px = priceMap[t.pair];
+    if (px == null) return acc;
+    const r = computeR(t, px);
+    return r == null ? acc : acc + r;
+  }, 0);
+
+  return (
+    <section className="mt-10">
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-3 border-b border-border/50 pb-3">
+        <div className="flex items-center gap-3">
+          <div className="flex h-8 w-8 items-center justify-center rounded-md border border-border/60 surface-2">
+            <BookOpen className="h-4 w-4 text-gold" />
+          </div>
+          <div>
+            <h2 className="text-sm font-semibold tracking-tight">Your active trades</h2>
+            <p className="text-xs text-muted-foreground">
+              Live positions from signals · auto mark-to-market
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {open > 0 ? (
+            <span className="rounded-full border border-bull/40 bg-bull/10 px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wider text-bull">
+              {open} open
+            </span>
+          ) : (
+            <span className="rounded-full border border-border/60 surface-2 px-2.5 py-0.5 text-[11px] text-muted-foreground">
+              No open positions
+            </span>
+          )}
+          <span className="text-xs text-muted-foreground">{closed.length} closed</span>
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
+        <Stat label="Win Rate" value={`${winRate}%`} tone="gold" />
+        <Stat label="Wins" value={String(wins)} tone="bull" />
+        <Stat label="Losses" value={String(losses)} tone="bear" />
+        <Stat
+          label="Net R (closed)"
+          value={`${totalR >= 0 ? "+" : ""}${totalR.toFixed(1)}R`}
+          tone={totalR >= 0 ? "bull" : "bear"}
+        />
+        <Stat
+          label="Open P/L"
+          value={`${openPnl >= 0 ? "+" : ""}${openPnl.toFixed(2)}R`}
+          tone={openPnl >= 0 ? "bull" : "bear"}
+        />
+      </div>
+
+      {/* Open positions table */}
+      <div
+        className={
+          openTrades.length > 0
+            ? "overflow-hidden rounded-xl border border-bull/30 surface-1 ring-1 ring-bull/10"
+            : "overflow-hidden rounded-xl border border-border/60 surface-1"
+        }
+      >
+        <div className="flex items-center justify-between border-b border-border/50 surface-2 px-4 py-2.5">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Open positions
+          </p>
+          {openTrades.length > 0 && (
+            <p className="text-[11px] text-muted-foreground">
+              P/L updates from live scan prices
+            </p>
+          )}
+        </div>
+        {loading ? (
+          <div className="p-8 text-center text-sm text-muted-foreground">Loading…</div>
+        ) : openTrades.length === 0 ? (
+          <div className="p-8 text-center">
+            <p className="text-sm font-medium">No active trades</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              When a signal is taken, it appears here with live P/L until SL or TP is hit.
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="surface-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2 text-left">Pair</th>
+                  <th className="px-3 py-2 text-left">Side</th>
+                  <th className="px-3 py-2 text-right">Entry</th>
+                  <th className="px-3 py-2 text-right">SL</th>
+                  <th className="px-3 py-2 text-right">TP</th>
+                  <th className="px-3 py-2 text-right">P/L</th>
+                  <th className="px-3 py-2 text-center">Status</th>
+                  <th className="px-3 py-2 text-right">Opened</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border/40 font-mono tabular-nums">
+                {openTrades.map((t) => {
+                  const isBuy = t.direction === "BUY";
+                  return (
+                    <tr key={t.id} className="hover:surface-2 transition-smooth">
+                      <td className="px-3 py-2 font-semibold">{t.pair}</td>
+                      <td className="px-3 py-2">
+                        <span
+                          className={cn(
+                            "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold",
+                            isBuy ? "bg-bull/10 text-bull" : "bg-bear/10 text-bear"
+                          )}
+                        >
+                          {isBuy ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />}
+                          {t.direction}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right">{t.entry}</td>
+                      <td className="px-3 py-2 text-right">
+                        <div className="flex flex-col items-end leading-tight">
+                          <span className="text-bear">{t.stop_loss}</span>
+                          {t.protection_active && t.status === "open" ? (
+                            <span className="text-[9px] font-bold uppercase tracking-wider text-bull">
+                              +2R · +1R protected
+                            </span>
+                          ) : t.tp1_hit && t.status === "open" ? (
+                            <span className="text-[9px] font-bold uppercase tracking-wider text-gold">
+                              BE · TP1 ✓
+                            </span>
+                          ) : null}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-right text-bull">{t.take_profit}</td>
+                      <td className="px-3 py-2 text-right">
+                        <PnlCell trade={t} currentPrice={priceMap[t.pair]} />
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        <StatusBadge status={t.status} />
+                      </td>
+                      <td className="px-3 py-2 text-right text-muted-foreground">
+                        {new Date(t.opened_at).toLocaleString(undefined, {
+                          month: "short",
+                          day: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {closed.length > 0 && (
+        <div className="mt-4 rounded-xl border border-border/60 surface-1 p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Recent closures
+            </h3>
+            <span className="text-[10px] text-muted-foreground">Latest 5 exits</span>
+          </div>
+          <div className="space-y-2">
+            {closed.slice(0, 5).map((t) => (
+              <div key={t.id} className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-2">
+                  <StatusBadge status={t.status} />
+                  <span className="font-semibold">{t.pair}</span>
+                  <span className="text-muted-foreground">{t.direction}</span>
+                </div>
+                <div className="flex items-center gap-3 font-mono tabular-nums text-muted-foreground">
+                  <span>Exit {t.close_price ?? "—"}</span>
+                  <span>{t.closed_at ? new Date(t.closed_at).toLocaleString() : "—"}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+};
+
+/**
+ * Compute the R-multiple for a trade given current price.
+ * R = (price-move-in-favor) / (initial-risk).  +1R = price reached TP-distance worth one risk unit.
+ */
+function computeR(t: Trade, price: number | undefined): number | null {
+  if (price == null) return null;
+  const risk = Math.abs(Number(t.entry) - Number(t.initial_stop_loss ?? t.stop_loss));
+  if (!risk) return null;
+  const move =
+    t.direction === "BUY" ? price - Number(t.entry) : Number(t.entry) - price;
+  return move / risk;
+}
+
+/**
+ * Realized R for a closed trade. Uses the recorded close price against the
+ * original risk when available (so break-even exits score ~0R); otherwise
+ * falls back to the planned R for wins and -1R for losses.
+ */
+function realizedR(t: Trade): number {
+  const risk = Math.abs(Number(t.entry) - Number(t.initial_stop_loss ?? t.stop_loss));
+  if (t.close_price != null && risk > 0) {
+    const move =
+      t.direction === "BUY"
+        ? Number(t.close_price) - Number(t.entry)
+        : Number(t.entry) - Number(t.close_price);
+    return move / risk;
+  }
+  return t.status === "win" ? Number(t.risk_reward) : -1;
+}
+
+
+
+const PnlCell = ({ trade, currentPrice }: { trade: Trade; currentPrice?: number }) => {
+  // For closed trades, show realized R based on the recorded outcome.
+  if (trade.status !== "open") {
+    const r = realizedR(trade);
+    const tone = r >= 0 ? "text-bull" : "text-bear";
+    return (
+      <span className={cn("font-semibold", tone)}>
+        {r >= 0 ? "+" : ""}
+        {r.toFixed(2)}R
+      </span>
+    );
+  }
+
+  // Open trade — mark-to-market with the latest scanned price.
+  const r = computeR(trade, currentPrice);
+  if (r == null) {
+    return <span className="text-muted-foreground">—</span>;
+  }
+  const move =
+    trade.direction === "BUY"
+      ? Number(currentPrice) - Number(trade.entry)
+      : Number(trade.entry) - Number(currentPrice);
+  const tone = r >= 0 ? "text-bull" : "text-bear";
+  // Pick decimals appropriate for the instrument's price magnitude.
+  const decimals = Math.abs(Number(trade.entry)) >= 100 ? 2 : 5;
+  return (
+    <div className="flex flex-col items-end leading-tight">
+      <span className={cn("font-semibold", tone)}>
+        {r >= 0 ? "+" : ""}
+        {r.toFixed(2)}R
+      </span>
+      <span className={cn("text-[10px]", tone, "opacity-80")}>
+        {move >= 0 ? "+" : ""}
+        {move.toFixed(decimals)}
+      </span>
+    </div>
+  );
+};
+
+const Stat = ({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "bull" | "bear" | "gold";
+}) => (
+  <div className="rounded-xl border border-border/60 surface-1 p-4 shadow-card-elev">
+    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
+    <p
+      className={cn(
+        "mt-1 font-mono text-2xl font-bold tabular-nums",
+        tone === "bull" && "text-bull",
+        tone === "bear" && "text-bear",
+        tone === "gold" && "text-gold"
+      )}
+    >
+      {value}
+    </p>
+  </div>
+);
+
+const StatusBadge = ({ status }: { status: "open" | "win" | "loss" }) => {
+  if (status === "win")
+    return (
+      <span className="inline-flex items-center gap-1 rounded-md bg-bull/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-bull">
+        <CheckCircle2 className="h-3 w-3" /> TP Hit
+      </span>
+    );
+  if (status === "loss")
+    return (
+      <span className="inline-flex items-center gap-1 rounded-md bg-bear/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-bear">
+        <XCircle className="h-3 w-3" /> SL Hit
+      </span>
+    );
+  return (
+    <span className="inline-flex items-center gap-1 rounded-md bg-gold/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-gold">
+      <Clock className="h-3 w-3" /> Open
+    </span>
+  );
+};
