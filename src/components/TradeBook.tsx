@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { ArrowDown, ArrowUp, BookOpen, CheckCircle2, XCircle, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { realizedR as sharedRealizedR } from "@/lib/tradeStats";
 
 interface Trade {
   id: string;
@@ -176,21 +177,54 @@ export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
-        <Stat label="Win Rate" value={`${winRate}%`} tone="gold" />
-        <Stat label="Wins" value={String(wins)} tone="bull" />
-        <Stat label="Losses" value={String(losses)} tone="bear" />
-        <Stat
-          label="Net R (closed)"
-          value={`${totalR >= 0 ? "+" : ""}${totalR.toFixed(1)}R`}
-          tone={totalR >= 0 ? "bull" : "bear"}
-        />
-        <Stat
-          label="Open P/L"
-          value={`${openPnl >= 0 ? "+" : ""}${openPnl.toFixed(2)}R`}
-          tone={openPnl >= 0 ? "bull" : "bear"}
-        />
+      {/* Overall closed R — primary performance readout */}
+      <div
+        className={
+          closed.length === 0
+            ? "mb-4 rounded-xl border border-border/60 surface-1 p-5"
+            : totalR >= 0
+              ? "mb-4 rounded-xl border border-bull/40 bg-bull/5 p-5 ring-1 ring-bull/15"
+              : "mb-4 rounded-xl border border-bear/40 bg-bear/5 p-5 ring-1 ring-bear/15"
+        }
+      >
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              Overall closed R
+            </p>
+            <p
+              className={
+                "mt-1 font-mono text-3xl font-bold tabular-nums tracking-tight " +
+                (closed.length === 0
+                  ? "text-muted-foreground"
+                  : totalR >= 0
+                    ? "text-bull"
+                    : "text-bear")
+              }
+            >
+              {closed.length === 0
+                ? "—"
+                : `${totalR >= 0 ? "+" : ""}${totalR.toFixed(2)}R`}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {closed.length === 0
+                ? "No closed trades yet — results appear here after SL/TP"
+                : `Sum of all closed trades · ${wins}W / ${losses}L · avg ${
+                    closed.length ? (totalR / closed.length).toFixed(2) : "0"
+                  }R per trade`}
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Stat label="Win rate" value={closed.length ? `${winRate}%` : "—"} tone="gold" />
+            <Stat label="Wins" value={String(wins)} tone="bull" />
+            <Stat label="Losses" value={String(losses)} tone="bear" />
+            <Stat
+              label="Open P/L"
+              value={open === 0 ? "—" : `${openPnl >= 0 ? "+" : ""}${openPnl.toFixed(2)}R`}
+              tone={openPnl >= 0 ? "bull" : "bear"}
+            />
+          </div>
+        </div>
       </div>
 
       {/* Open positions table */}
@@ -300,19 +334,31 @@ export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
             <span className="text-[10px] text-muted-foreground">Latest 5 exits</span>
           </div>
           <div className="space-y-2">
-            {closed.slice(0, 5).map((t) => (
+            {closed.slice(0, 8).map((t) => {
+              const r = realizedR(t);
+              return (
               <div key={t.id} className="flex flex-wrap items-center justify-between gap-2 text-xs">
                 <div className="flex items-center gap-2">
                   <StatusBadge status={t.status} />
                   <span className="font-semibold">{t.pair}</span>
                   <span className="text-muted-foreground">{t.direction}</span>
+                  <span
+                    className={
+                      "font-mono font-semibold tabular-nums " +
+                      (r >= 0 ? "text-bull" : "text-bear")
+                    }
+                  >
+                    {r >= 0 ? "+" : ""}
+                    {r.toFixed(2)}R
+                  </span>
                 </div>
                 <div className="flex items-center gap-3 font-mono tabular-nums text-muted-foreground">
                   <span>Exit {t.close_price ?? "—"}</span>
                   <span>{t.closed_at ? new Date(t.closed_at).toLocaleString() : "—"}</span>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -334,20 +380,12 @@ function computeR(t: Trade, price: number | undefined): number | null {
 }
 
 /**
- * Realized R for a closed trade. Uses the recorded close price against the
- * original risk when available (so break-even exits score ~0R); otherwise
- * falls back to the planned R for wins and -1R for losses.
+ * Realized R for a closed trade.
+ * Uses close_price vs initial risk. Backend sets close_price to the peak
+ * favorable price when MFE exceeded the exit (e.g. +5R then BE → +5R).
  */
 function realizedR(t: Trade): number {
-  const risk = Math.abs(Number(t.entry) - Number(t.initial_stop_loss ?? t.stop_loss));
-  if (t.close_price != null && risk > 0) {
-    const move =
-      t.direction === "BUY"
-        ? Number(t.close_price) - Number(t.entry)
-        : Number(t.entry) - Number(t.close_price);
-    return move / risk;
-  }
-  return t.status === "win" ? Number(t.risk_reward) : -1;
+  return sharedRealizedR(t);
 }
 
 

@@ -19,13 +19,22 @@ const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY");
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-const FCM_GATEWAY_URL = "https://connector-gateway.lovable.dev/firebase_messaging";
-
+// Direct FCM send (no Lovable gateway). Uses Firebase Cloud Messaging legacy
+// server key stored as a Supabase Edge Function secret:
+//   FIREBASE_SERVER_KEY  (or FCM_SERVER_KEY)
+// Get it: Firebase Console → Project settings → Cloud Messaging →
+//   Cloud Messaging API (Legacy) → Server key
 async function sendTradePush(title: string, body: string, eventId: string): Promise<void> {
-  const lovableApiKey = Deno.env.get("LOVABLE_API_KEY");
-  const connectionApiKey = Deno.env.get("FIREBASE_MESSAGING_API_KEY");
-  if (!lovableApiKey || !connectionApiKey) {
-    console.warn("Trade push skipped: Firebase messaging is not configured");
+  const serverKey =
+    Deno.env.get("FIREBASE_SERVER_KEY") ??
+    Deno.env.get("FCM_SERVER_KEY") ??
+    Deno.env.get("FIREBASE_MESSAGING_API_KEY");
+
+  if (!serverKey) {
+    console.warn(
+      "Trade push skipped: set FIREBASE_SERVER_KEY secret on the edge function " +
+        "(Firebase → Project settings → Cloud Messaging → Server key)",
+    );
     return;
   }
 
@@ -37,28 +46,68 @@ async function sendTradePush(title: string, body: string, eventId: string): Prom
     return;
   }
 
-  await Promise.all((subscriptions ?? []).map(async (subscription) => {
-    const response = await fetch(`${FCM_GATEWAY_URL}/v1/projects/_/messages:send`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${lovableApiKey}`,
-        "X-Connection-Api-Key": connectionApiKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        message: {
-          token: subscription.token,
-          data: { title, body, event_id: eventId, url: "/" },
-        },
-      }),
-    });
+  const tokens = (subscriptions ?? []).filter((s) => s.token && String(s.token).length > 20);
+  if (!tokens.length) {
+    console.warn("Trade push skipped: no device tokens in push_subscriptions");
+    return;
+  }
 
-    if (!response.ok) {
+  await Promise.all(tokens.map(async (subscription) => {
+    try {
+      const response = await fetch("https://fcm.googleapis.com/fcm/send", {
+        method: "POST",
+        headers: {
+          Authorization: `key=${serverKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          to: subscription.token,
+          priority: "high",
+          notification: {
+            title,
+            body,
+            icon: "/logo.svg",
+            click_action: "/",
+          },
+          data: {
+            title,
+            body,
+            event_id: eventId,
+            url: "/",
+          },
+        }),
+      });
+
       const details = await response.text();
-      console.error(`Trade push failed [${response.status}]: ${details}`);
-      if (response.status === 400 || response.status === 404 || response.status === 410) {
-        await db.from("push_subscriptions").delete().eq("id", subscription.id);
+      if (!response.ok) {
+        console.error(`Trade push failed [${response.status}]: ${details}`);
+        // Invalid / unregistered token → remove so we don't keep failing
+        if (
+          response.status === 400 ||
+          response.status === 404 ||
+          details.includes("NotRegistered") ||
+          details.includes("InvalidRegistration")
+        ) {
+          await db.from("push_subscriptions").delete().eq("id", subscription.id);
+        }
+        return;
       }
+
+      // FCM returns 200 even for some token errors — check body
+      try {
+        const parsed = JSON.parse(details);
+        if (parsed.failure >= 1 || parsed.results?.[0]?.error) {
+          const err = parsed.results?.[0]?.error ?? "unknown";
+          console.error(`Trade push token error: ${err}`);
+          if (err === "NotRegistered" || err === "InvalidRegistration") {
+            await db.from("push_subscriptions").delete().eq("id", subscription.id);
+          }
+        }
+      } catch {
+        // non-JSON body — ignore
+      }
+    } catch (e) {
+      console.error("Trade push network error:", e instanceof Error ? e.message : e);
     }
   }));
 }
@@ -104,7 +153,7 @@ interface Signal {
   stopLoss: number;
   takeProfit: number;        // TP1 — partial close (5R)
   takeProfit2: number;       // TP2 — runner (15R)
-  riskReward: number;        // Reported RR = TP2 (max target)
+  riskReward: number;        // Reported RR = TP1 (primary target); TP2 is runner only
   confidence: number;
   structure: "BOS" | "CHoCH";
   confluences: string[];
@@ -1773,9 +1822,11 @@ async function analyzePairFromCandles(
   // TP2 = the STRONGEST opposing HTF zone within reach (the "top of the
   //   move"). 3R floor, 10R cap → captures the full ride when structure allows.
   const minTP1 = risk * 1.5;
-  const maxTP1 = risk * 4;
-  const minTP2 = risk * 3;
-  const maxTP2 = risk * 10;
+  // TP1 is the bankable partial; TP2 is a runner. Cap runner tighter on crypto
+  // so BTC/ETH don't show inflated 8–10R "risk_reward" on every setup.
+  const maxTP1 = risk * 3;
+  const minTP2 = risk * 2.5;
+  const maxTP2 = isCrypto(pair) ? risk * 5 : risk * 6;
 
   const opposingType: SRZone["type"] = direction === "BUY" ? "resistance" : "support";
   // All opposing HTF zones beyond entry, sorted nearest → farthest
@@ -1817,7 +1868,7 @@ async function analyzePairFromCandles(
   const minTP2Final = Math.max(minTP2, tp1Distance + risk * 0.5);
   const takeProfit2 = strongestZone != null
     ? clamp(strongestZone, minTP2Final, maxTP2)
-    : direction === "BUY" ? entry + risk * 6 : entry - risk * 6;
+    : direction === "BUY" ? entry + risk * (isCrypto(pair) ? 4 : 5) : entry - risk * (isCrypto(pair) ? 4 : 5);
 
   const rr1 = Number((Math.abs(takeProfit - entry) / risk).toFixed(2));
   const rr2 = Number((Math.abs(takeProfit2 - entry) / risk).toFixed(2));
@@ -1998,7 +2049,7 @@ async function analyzePairFromCandles(
       stopLoss: Number(stopLoss.toFixed(decimals)),
       takeProfit: Number(takeProfit.toFixed(decimals)),
       takeProfit2: Number(takeProfit2.toFixed(decimals)),
-      riskReward: rr2,
+      riskReward: rr1,  // TP1 R — actual book PnL uses close_price
       confidence,
       structure: structure.structure,
       confluences,
@@ -2148,10 +2199,11 @@ async function analyzeGoldScalp(
   };
 }
 
-// Resolve open trades using two-stage logic:
+// Resolve open trades using two-stage logic + peak R (MFE) accounting:
 // 1. If TP1 not yet hit: hit TP1 → mark tp1_hit=true, move SL to break-even (entry).
 //    Hit SL first → loss.
-// 2. If TP1 already hit: hit TP2 → win at TP2. Hit BE-stop → win at entry (still locked profit).
+// 2. If TP1 already hit: hit TP2 → win at TP2. Hit BE-stop → win.
+// 3. Book close uses peak favorable price when it exceeds exit (e.g. +5R then BE → +5R).
 async function resolveOpenTrades(
   pair: string,
   candles: Candle[],
@@ -2181,7 +2233,9 @@ async function resolveOpenTrades(
       await db.from("trades").update({ initial_stop_loss: originalSL }).eq("id", t.id);
     }
 
-    // Walk candles; SL flips to break-even after TP1 hits
+    // Walk candles; SL flips to break-even after TP1 hits.
+    // Track peak favorable price (MFE). If price reaches e.g. +5R then
+    // reverses to BE, the book records +5R — not 0R scratch.
     let tp1Hit = !!t.tp1_hit;
     let tp1HitAt: number | null = t.tp1_hit_at
       ? new Date(t.tp1_hit_at as string).getTime() / 1000
@@ -2191,12 +2245,26 @@ async function resolveOpenTrades(
     let outcome: "win" | "loss" | null = null;
     let closePrice: number | null = null;
     let closedAt: number | null = null;
+    // Best price seen in the trade direction (for MFE / peak R)
+    let peakPrice = entryPrice;
+
+    const oneR = Math.abs(entryPrice - originalSL);
+    const rFromPrice = (px: number): number => {
+      if (oneR <= 0) return 0;
+      return isBuy ? (px - entryPrice) / oneR : (entryPrice - px) / oneR;
+    };
 
     for (const c of future) {
       // Skip candles before TP1 already recorded
       if (tp1HitAt && c.time <= tp1HitAt) continue;
 
-      const oneR = Math.abs(entryPrice - originalSL);
+      // Update maximum favorable excursion from this bar's extreme
+      if (isBuy) {
+        if (c.high > peakPrice) peakPrice = c.high;
+      } else {
+        if (c.low < peakPrice) peakPrice = c.low;
+      }
+
       const twoRLevel = isBuy ? entryPrice + oneR * 2 : entryPrice - oneR * 2;
       const oneRProtectedStop = isBuy ? entryPrice + oneR : entryPrice - oneR;
       const hitTP1 = !tp1Hit && (isBuy ? c.high >= tp1 : c.low <= tp1);
@@ -2242,20 +2310,18 @@ async function resolveOpenTrades(
           : entryPrice + riskDist * 0.6;
         const closedBeyond = isBuy ? c.close < invalidLevel : c.close > invalidLevel;
         if (riskDist > 0 && closedBeyond) {
-        outcome = "loss";
+          outcome = "loss";
           closePrice = c.close;
           closedAt = c.time;
           break;
         }
       }
 
-
       // Worst-case fill: if SL & TP both touched in same candle, SL wins
       if (hitSL && (hitTP1 || hitTP2)) {
-        if (tp1Hit) {
-          // BE-stop after TP1 = scratch (counts as win since partial was secured)
+        if (tp1Hit || protectionActive) {
           outcome = "win";
-          closePrice = entryPrice;
+          closePrice = activeSL; // may be BE or +1R protect — peak R applied below
         } else {
           outcome = "loss";
           closePrice = originalSL;
@@ -2264,7 +2330,7 @@ async function resolveOpenTrades(
         break;
       }
       if (hitSL) {
-        outcome = tp1Hit ? "win" : "loss";
+        outcome = (tp1Hit || protectionActive) ? "win" : "loss";
         closePrice = activeSL;
         closedAt = c.time;
         break;
@@ -2284,26 +2350,42 @@ async function resolveOpenTrades(
           .update({
             tp1_hit: true,
             tp1_hit_at: new Date(c.time * 1000).toISOString(),
-            // Trail SL up to break-even so the trade book reflects the locked-in risk.
             stop_loss: entryPrice,
           })
           .eq("id", t.id);
       }
-
     }
 
     if (outcome) {
+      // Book the peak favorable R when it exceeds the exit R.
+      // Example: ran to +5R then stopped at BE → close_price = peak, ~+5R not 0R.
+      let bookPrice = closePrice;
+      if (outcome === "win" && oneR > 0 && bookPrice != null) {
+        const exitR = rFromPrice(bookPrice);
+        const peakR = rFromPrice(peakPrice);
+        if (peakR > exitR + 0.05) {
+          bookPrice = peakPrice;
+        }
+      }
+
+      const bookedR =
+        bookPrice != null && oneR > 0 ? Number(rFromPrice(bookPrice).toFixed(2)) : null;
+
       await db
         .from("trades")
         .update({
           status: outcome,
-          close_price: closePrice,
+          close_price: bookPrice,
           closed_at: new Date((closedAt ?? Date.now() / 1000) * 1000).toISOString(),
+          // Keep risk_reward aligned with what the book actually credits
+          ...(bookedR != null && bookedR > 0 ? { risk_reward: bookedR } : {}),
         })
         .eq("id", t.id);
       await sendTradePush(
         `Trade closed · ${pair} ${outcome === "win" ? "profit" : "loss"}`,
-        `${t.direction} closed at ${closePrice ?? "market"}${closedAt ? ` · ${new Date(closedAt * 1000).toISOString()}` : ""}`,
+        `${t.direction} closed at ${bookPrice ?? "market"}${
+          bookedR != null ? ` · ${bookedR >= 0 ? "+" : ""}${bookedR}R` : ""
+        }${closedAt ? ` · ${new Date(closedAt * 1000).toISOString()}` : ""}`,
         `${t.id}-closed-${closedAt ?? Date.now()}`,
       );
       resolved++;
