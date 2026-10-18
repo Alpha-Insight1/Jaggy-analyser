@@ -250,45 +250,77 @@ export const PerPairStats = () => {
               No trades recorded yet.
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead className="surface-2 text-[10px] uppercase tracking-wider text-muted-foreground">
-                  <tr>
-                    <th className="px-3 py-2 text-left">Pair</th>
-                    <th className="px-3 py-2 text-left">Style</th>
-                    <th className="px-3 py-2 text-right">W</th>
-                    <th className="px-3 py-2 text-right">L</th>
-                    <th className="px-3 py-2 text-right">Open</th>
-                    <th className="px-3 py-2 text-right">Win %</th>
-                    <th className="px-3 py-2 text-right">Net R</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border/40 font-mono tabular-nums">
-                  {pairStats.map((s) => (
-                    <tr key={s.pair}>
-                      <td className="px-3 py-2 text-left font-semibold">{s.pair}</td>
-                      <td className="px-3 py-2 text-left text-muted-foreground">{s.style}</td>
-                      <td className="px-3 py-2 text-right text-bull">{s.wins}</td>
-                      <td className="px-3 py-2 text-right text-bear">{s.losses}</td>
-                      <td className="px-3 py-2 text-right text-muted-foreground">{s.open}</td>
-                      <td className="px-3 py-2 text-right">
+            <>
+              {/* Mobile pair cards */}
+              <div className="divide-y divide-border/40 md:hidden">
+                {pairStats.map((s) => (
+                  <div key={s.pair} className="flex items-center justify-between gap-3 px-3 py-3">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-sm truncate">{s.pair}</p>
+                      <p className="text-[11px] text-muted-foreground">
+                        {s.style} · {s.wins}W / {s.losses}L
+                        {s.open ? ` · ${s.open} open` : ""}
+                      </p>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="text-[11px] text-muted-foreground">
                         {s.wins + s.losses > 0 ? `${s.winRate}%` : "—"}
-                      </td>
-                      <td
+                      </p>
+                      <p
                         className={cn(
-                          "px-3 py-2 text-right font-semibold",
+                          "font-mono text-sm font-semibold",
                           s.netR > 0 ? "text-bull" : s.netR < 0 ? "text-bear" : "text-muted-foreground",
                         )}
                       >
                         {s.wins + s.losses === 0
                           ? "—"
                           : `${s.netR >= 0 ? "+" : ""}${s.netR.toFixed(1)}R`}
-                      </td>
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {/* Desktop table */}
+              <div className="hidden overflow-x-auto md:block">
+                <table className="w-full text-xs">
+                  <thead className="surface-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Pair</th>
+                      <th className="px-3 py-2 text-left">Style</th>
+                      <th className="px-3 py-2 text-right">W</th>
+                      <th className="px-3 py-2 text-right">L</th>
+                      <th className="px-3 py-2 text-right">Open</th>
+                      <th className="px-3 py-2 text-right">Win %</th>
+                      <th className="px-3 py-2 text-right">Net R</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody className="divide-y divide-border/40 font-mono tabular-nums">
+                    {pairStats.map((s) => (
+                      <tr key={s.pair}>
+                        <td className="px-3 py-2 text-left font-semibold">{s.pair}</td>
+                        <td className="px-3 py-2 text-left text-muted-foreground">{s.style}</td>
+                        <td className="px-3 py-2 text-right text-bull">{s.wins}</td>
+                        <td className="px-3 py-2 text-right text-bear">{s.losses}</td>
+                        <td className="px-3 py-2 text-right text-muted-foreground">{s.open}</td>
+                        <td className="px-3 py-2 text-right">
+                          {s.wins + s.losses > 0 ? `${s.winRate}%` : "—"}
+                        </td>
+                        <td
+                          className={cn(
+                            "px-3 py-2 text-right font-semibold",
+                            s.netR > 0 ? "text-bull" : s.netR < 0 ? "text-bear" : "text-muted-foreground",
+                          )}
+                        >
+                          {s.wins + s.losses === 0
+                            ? "—"
+                            : `${s.netR >= 0 ? "+" : ""}${s.netR.toFixed(1)}R`}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </div>
       </div>

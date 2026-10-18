@@ -15,6 +15,8 @@ import { CapitalPanel } from "@/components/CapitalPanel";
 import { AccountButton } from "@/components/AccountButton";
 import { SectionHeader } from "@/components/SectionHeader";
 import { SummaryStrip } from "@/components/SummaryStrip";
+import { CategorySection, CategoryNav } from "@/components/CategorySection";
+import { groupSignals, groupDeveloping } from "@/lib/signalCategories";
 
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -128,13 +130,16 @@ const Index = () => {
   return (
     <div className="min-h-screen">
       {/* Header */}
-      <header className="sticky top-0 z-10 border-b border-border/60 surface-1/80 backdrop-blur-md">
-        <div className="container flex flex-col gap-3 py-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-center gap-3">
-            <BrandLogo size={36} className="shadow-gold" />
-            <div className="leading-tight">
-              <h1 className="text-base font-semibold tracking-tight">Jaggy Analyser</h1>
-              <p className="text-[11px] text-muted-foreground">SMC multi-TF desk · Forex 15M · Indices/Gold 5M · Gold scalp</p>
+      <header className="sticky top-0 z-20 border-b border-border/60 surface-1/95 backdrop-blur-md pt-safe">
+        <div className="container flex flex-col gap-2.5 py-2.5 sm:py-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <BrandLogo size={32} className="shadow-gold shrink-0 sm:h-9 sm:w-9" />
+            <div className="leading-tight min-w-0">
+              <h1 className="text-sm sm:text-base font-semibold tracking-tight truncate">Jaggy Analyser</h1>
+              <p className="text-[10px] sm:text-[11px] text-muted-foreground truncate">
+                <span className="sm:hidden">SMC · multi-TF signals</span>
+                <span className="hidden sm:inline">SMC multi-TF desk · Forex 15M · Indices/Gold 5M · Gold scalp</span>
+              </p>
             </div>
           </div>
 
@@ -168,7 +173,7 @@ const Index = () => {
         </div>
       </header>
 
-      <main className="container py-8">
+      <main className="container px-3 sm:px-4 py-4 sm:py-8 pb-safe">
         <MarketStatusBanner />
 
         <SummaryStrip
@@ -194,7 +199,7 @@ const Index = () => {
           <SectionHeader
             icon={Activity}
             title="Active signals"
-            subtitle="Ready to trade — swing setups + Gold scalps"
+            subtitle="Grouped by market — only confirmed setups"
             right={
               lastUpdated && (
                 <span className="font-mono">Updated {lastUpdated.toLocaleTimeString()}</span>
@@ -215,77 +220,45 @@ const Index = () => {
           )}
 
           {data && data.signals.length > 0 && (() => {
-            const scalpSignals = data.signals.filter((s) => s.signalStyle === "scalp");
-            const swingSignals = data.signals.filter((s) => s.signalStyle !== "scalp");
+            const groups = groupSignals(data.signals);
+            const nav = groups.map((g) => ({
+              id: `active-${g.cat.id}`,
+              label: g.cat.title,
+              count: g.items.length,
+            }));
             return (
-              <div className="space-y-8">
-                {/* Gold / scalp callout */}
-                {scalpSignals.length > 0 && (
-                  <div className="rounded-xl border border-gold/40 bg-gold/5 p-4 md:p-5">
-                    <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span className="flex h-7 w-7 items-center justify-center rounded-md bg-gold/20 text-gold">
-                          <Zap className="h-4 w-4" />
-                        </span>
-                        <div>
-                          <p className="text-sm font-semibold tracking-tight text-gold">
-                            Gold scalp — active now
-                          </p>
-                          <p className="text-[11px] text-muted-foreground">
-                            1H trend · 5M break of structure · tighter stops
-                          </p>
-                        </div>
-                      </div>
-                      <span className="rounded-full border border-gold/40 bg-gold/10 px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wider text-gold">
-                        {scalpSignals.length} scalp{scalpSignals.length > 1 ? "s" : ""}
-                      </span>
-                    </div>
-                    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                      {scalpSignals.map((s, i) => (
-                        <SignalCard key={`scalp-${s.pair}-${s.timestamp}`} signal={s} index={i} />
+              <div className="space-y-5">
+                <CategoryNav items={nav} />
+                {groups.map(({ cat, items }) => (
+                  <CategorySection
+                    key={cat.id}
+                    cat={cat}
+                    count={items.length}
+                    id={`active-${cat.id}`}
+                  >
+                    <div className="grid gap-3 sm:gap-4 md:grid-cols-2 xl:grid-cols-3">
+                      {items.map((s, i) => (
+                        <SignalCard
+                          key={`${cat.id}-${s.pair}-${s.timestamp}`}
+                          signal={s}
+                          index={i}
+                        />
                       ))}
                     </div>
-                  </div>
-                )}
-
-                {/* Swing signals */}
-                {swingSignals.length > 0 && (
-                  <div>
-                    <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span className="flex h-7 w-7 items-center justify-center rounded-md border border-border/60 surface-2">
-                          <Activity className="h-4 w-4 text-foreground/80" />
-                        </span>
-                        <div>
-                          <p className="text-sm font-semibold tracking-tight">Swing setups</p>
-                          <p className="text-[11px] text-muted-foreground">
-                            Forex 15M · Indices &amp; Gold 5M · 4H structure + Daily bias
-                          </p>
-                        </div>
-                      </div>
-                      <span className="rounded-full border border-border/60 surface-2 px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground">
-                        {swingSignals.length} active
-                      </span>
-                    </div>
-                    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                      {swingSignals.map((s, i) => (
-                        <SignalCard key={`swing-${s.pair}-${s.timestamp}`} signal={s} index={i} />
-                      ))}
-                    </div>
-                  </div>
-                )}
+                  </CategorySection>
+                ))}
               </div>
             );
           })()}
 
           {data && data.errors.length > 0 && (
-            <details className="mt-6 rounded-lg border border-border/60 surface-1 p-4 text-xs">
-              <summary className="cursor-pointer text-muted-foreground">
-                {data.errors.length} pair(s) failed to load
+            <details className="mt-4 rounded-lg border border-border/50 surface-1 px-3 py-2 text-xs text-muted-foreground">
+              <summary className="cursor-pointer font-medium">
+                {data.errors.length} instrument{data.errors.length > 1 ? "s" : ""} failed to scan
               </summary>
-              <ul className="mt-2 space-y-1 font-mono text-muted-foreground">
-                {data.errors.map((e, i) => (
-                  <li key={i}>
+              <ul className="mt-2 space-y-1 font-mono">
+                {data.errors.map((e) => (
+                  <li key={e.pair}>
                     {e.pair}: {e.error}
                   </li>
                 ))}
@@ -299,7 +272,7 @@ const Index = () => {
           <SectionHeader
             icon={Radar}
             title="Developing setups"
-            subtitle="Not ready yet — watch these for a possible entry"
+            subtitle="Watchlist by market — not confirmed for entry yet"
             right={
               <>
                 {newsCount > 0 && (
@@ -319,19 +292,53 @@ const Index = () => {
             </div>
           )}
 
-          {developing.length > 0 && (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {developing.map((d, i) => (
-                <DevelopingSetupCard key={d.pair} setup={d} index={i} />
-              ))}
-            </div>
-          )}
+          {developing.length > 0 && (() => {
+            const groups = groupDeveloping(developing);
+            const nav = groups.map((g) => ({
+              id: `dev-${g.cat.id}`,
+              label: g.cat.title,
+              count: g.items.length,
+            }));
+            return (
+              <div className="space-y-5">
+                <CategoryNav items={nav} />
+                {groups.map(({ cat, items }) => (
+                  <CategorySection
+                    key={`dev-${cat.id}`}
+                    cat={cat}
+                    count={items.length}
+                    id={`dev-${cat.id}`}
+                  >
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                      {items.map((d, i) => (
+                        <DevelopingSetupCard key={d.pair} setup={d} index={i} />
+                      ))}
+                    </div>
+                  </CategorySection>
+                ))}
+              </div>
+            );
+          })()}
         </section>
 
-        {/* Managed paper capital — auto-sized positions mirrored from live signals */}
-        <CapitalPanel priceMap={priceMap} />
+        {/* Managed paper capital */}
+        <section className="mb-10">
+          <SectionHeader
+            icon={Activity}
+            title="Paper capital"
+            subtitle="Position sizing from your account settings"
+          />
+          <CapitalPanel priceMap={priceMap} />
+        </section>
 
-        {/* Trade book + analytics — pass latest scanned prices so open trades can be marked-to-market */}
+        {/* Performance desk */}
+        <section className="mb-4">
+          <SectionHeader
+            icon={Activity}
+            title="Performance desk"
+            subtitle="Open trades · equity · last 30 days · by market"
+          />
+        </section>
         <TradeBook priceMap={priceMap} />
         <EquityCurve />
         <PerPairStats />

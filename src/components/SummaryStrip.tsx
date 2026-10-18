@@ -68,7 +68,7 @@ export const SummaryStrip = ({ signals, developing, scanned, failed, loading }: 
   ];
 
   return (
-    <div className="mb-8 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
+    <div className="mb-6 sm:mb-8 grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-3 lg:grid-cols-5">
       {items.map(({ icon: Icon, label, value, sub, highlight, gold }) => (
         <div
           key={label}

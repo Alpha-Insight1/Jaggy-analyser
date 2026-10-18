@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { ArrowDown, ArrowUp, BookOpen, CheckCircle2, XCircle, Clock } from "lucide-react";
+import { ArrowDown, ArrowUp, BookOpen, CheckCircle2, XCircle, Clock, Ban } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { realizedR as sharedRealizedR } from "@/lib/tradeStats";
@@ -33,6 +33,7 @@ export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [closedTrades, setClosedTrades] = useState<Trade[]>([]);
   const [loading, setLoading] = useState(true);
+  const [actingId, setActingId] = useState<string | null>(null);
 
   const refreshTrades = useCallback(async () => {
     const [openRes, closedRes] = await Promise.all([
@@ -52,6 +53,66 @@ export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
     if (!closedRes.error && closedRes.data) setClosedTrades(closedRes.data as Trade[]);
     setLoading(false);
   }, []);
+
+  /** Manual close at current scan price (or entry if no price). */
+  const manualClose = useCallback(
+    async (t: Trade, as: "win" | "loss") => {
+      if (actingId) return;
+      setActingId(t.id);
+      const px = priceMap[t.pair];
+      const isBuy = t.direction === "BUY";
+      let closePrice: number;
+      if (as === "loss") {
+        closePrice = Number(t.initial_stop_loss ?? t.stop_loss);
+      } else if (px != null) {
+        closePrice = px;
+      } else {
+        closePrice = Number(t.entry);
+      }
+      // If user marks win but price is worse than entry, still allow — they know their fill
+      const { error } = await supabase
+        .from("trades")
+        .update({
+          status: as,
+          close_price: closePrice,
+          closed_at: new Date().toISOString(),
+        })
+        .eq("id", t.id)
+        .eq("status", "open");
+      setActingId(null);
+      if (error) {
+        toast.error("Could not close trade", {
+          description: error.message + " — you may need the trades UPDATE policy (see README).",
+        });
+        return;
+      }
+      toast.success(as === "win" ? "Closed as win" : "Closed as loss", {
+        description: `${t.pair} @ ${closePrice}`,
+      });
+      void refreshTrades();
+    },
+    [actingId, priceMap, refreshTrades],
+  );
+
+  /** Skip = remove bad auto-entry from the book (does not count in win rate). */
+  const skipTrade = useCallback(
+    async (t: Trade) => {
+      if (actingId) return;
+      if (!confirm(`Skip ${t.pair} ${t.direction}? It will be removed and not count in stats.`)) return;
+      setActingId(t.id);
+      const { error } = await supabase.from("trades").delete().eq("id", t.id).eq("status", "open");
+      setActingId(null);
+      if (error) {
+        toast.error("Could not skip trade", {
+          description: error.message + " — you may need DELETE permission on trades.",
+        });
+        return;
+      }
+      toast.message("Trade skipped", { description: `${t.pair} removed from book` });
+      void refreshTrades();
+    },
+    [actingId, refreshTrades],
+  );
 
   useEffect(() => {
     refreshTrades();
@@ -255,73 +316,196 @@ export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="surface-2 text-[10px] uppercase tracking-wider text-muted-foreground">
-                <tr>
-                  <th className="px-3 py-2 text-left">Pair</th>
-                  <th className="px-3 py-2 text-left">Side</th>
-                  <th className="px-3 py-2 text-right">Entry</th>
-                  <th className="px-3 py-2 text-right">SL</th>
-                  <th className="px-3 py-2 text-right">TP</th>
-                  <th className="px-3 py-2 text-right">P/L</th>
-                  <th className="px-3 py-2 text-center">Status</th>
-                  <th className="px-3 py-2 text-right">Opened</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/40 font-mono tabular-nums">
-                {openTrades.map((t) => {
-                  const isBuy = t.direction === "BUY";
-                  return (
-                    <tr key={t.id} className="hover:surface-2 transition-smooth">
-                      <td className="px-3 py-2 font-semibold">{t.pair}</td>
-                      <td className="px-3 py-2">
-                        <span
-                          className={cn(
-                            "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold",
-                            isBuy ? "bg-bull/10 text-bull" : "bg-bear/10 text-bear"
+          <>
+            {/* Mobile: stacked cards */}
+            <div className="space-y-3 p-3 md:hidden">
+              {openTrades.map((t) => {
+                const isBuy = t.direction === "BUY";
+                return (
+                  <div
+                    key={t.id}
+                    className="rounded-lg border border-border/60 surface-2 p-3 space-y-3"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold">{t.pair}</p>
+                        <div className="mt-1 flex flex-wrap items-center gap-2">
+                          <span
+                            className={
+                              "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold " +
+                              (isBuy ? "bg-bull/10 text-bull" : "bg-bear/10 text-bear")
+                            }
+                          >
+                            {isBuy ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />}
+                            {t.direction}
+                          </span>
+                          <StatusBadge status={t.status} />
+                          {t.protection_active && (
+                            <span className="text-[9px] font-bold uppercase text-bull">+1R protected</span>
                           )}
-                        >
-                          {isBuy ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />}
-                          {t.direction}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-right">{t.entry}</td>
-                      <td className="px-3 py-2 text-right">
-                        <div className="flex flex-col items-end leading-tight">
-                          <span className="text-bear">{t.stop_loss}</span>
-                          {t.protection_active && t.status === "open" ? (
-                            <span className="text-[9px] font-bold uppercase tracking-wider text-bull">
-                              +2R · +1R protected
-                            </span>
-                          ) : t.tp1_hit && t.status === "open" ? (
-                            <span className="text-[9px] font-bold uppercase tracking-wider text-gold">
-                              BE · TP1 ✓
-                            </span>
-                          ) : null}
+                          {t.tp1_hit && !t.protection_active && (
+                            <span className="text-[9px] font-bold uppercase text-gold">TP1 · BE</span>
+                          )}
                         </div>
-                      </td>
-                      <td className="px-3 py-2 text-right text-bull">{t.take_profit}</td>
-                      <td className="px-3 py-2 text-right">
+                      </div>
+                      <div className="text-right">
+                        <p className="text-[10px] uppercase text-muted-foreground">P/L</p>
                         <PnlCell trade={t} currentPrice={priceMap[t.pair]} />
-                      </td>
-                      <td className="px-3 py-2 text-center">
-                        <StatusBadge status={t.status} />
-                      </td>
-                      <td className="px-3 py-2 text-right text-muted-foreground">
-                        {new Date(t.opened_at).toLocaleString(undefined, {
-                          month: "short",
-                          day: "numeric",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 font-mono text-xs tabular-nums">
+                      <div>
+                        <p className="text-[10px] text-muted-foreground">Entry</p>
+                        <p className="font-semibold">{t.entry}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-muted-foreground">SL</p>
+                        <p className="font-semibold text-bear">{t.stop_loss}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-muted-foreground">TP</p>
+                        <p className="font-semibold text-bull">{t.take_profit}</p>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">
+                      Opened{" "}
+                      {new Date(t.opened_at).toLocaleString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </p>
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        type="button"
+                        disabled={actingId === t.id}
+                        onClick={() => void manualClose(t, "win")}
+                        className="min-h-[40px] rounded-md border border-bull/40 bg-bull/10 text-xs font-semibold text-bull active:scale-[0.98] disabled:opacity-50"
+                      >
+                        Close win
+                      </button>
+                      <button
+                        type="button"
+                        disabled={actingId === t.id}
+                        onClick={() => void manualClose(t, "loss")}
+                        className="min-h-[40px] rounded-md border border-bear/40 bg-bear/10 text-xs font-semibold text-bear active:scale-[0.98] disabled:opacity-50"
+                      >
+                        Close loss
+                      </button>
+                      <button
+                        type="button"
+                        disabled={actingId === t.id}
+                        onClick={() => void skipTrade(t)}
+                        className="min-h-[40px] rounded-md border border-border/60 text-xs text-muted-foreground active:scale-[0.98] disabled:opacity-50"
+                      >
+                        Skip
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Desktop: table */}
+            <div className="hidden overflow-x-auto md:block">
+              <table className="w-full text-xs">
+                <thead className="surface-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Pair</th>
+                    <th className="px-3 py-2 text-left">Side</th>
+                    <th className="px-3 py-2 text-right">Entry</th>
+                    <th className="px-3 py-2 text-right">SL</th>
+                    <th className="px-3 py-2 text-right">TP</th>
+                    <th className="px-3 py-2 text-right">P/L</th>
+                    <th className="px-3 py-2 text-center">Status</th>
+                    <th className="px-3 py-2 text-right">Opened</th>
+                    <th className="px-3 py-2 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/40 font-mono tabular-nums">
+                  {openTrades.map((t) => {
+                    const isBuy = t.direction === "BUY";
+                    return (
+                      <tr key={t.id} className="hover:surface-2 transition-smooth">
+                        <td className="px-3 py-2 font-semibold">{t.pair}</td>
+                        <td className="px-3 py-2">
+                          <span
+                            className={cn(
+                              "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold",
+                              isBuy ? "bg-bull/10 text-bull" : "bg-bear/10 text-bear"
+                            )}
+                          >
+                            {isBuy ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />}
+                            {t.direction}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-right">{t.entry}</td>
+                        <td className="px-3 py-2 text-right">
+                          <div className="flex flex-col items-end leading-tight">
+                            <span className="text-bear">{t.stop_loss}</span>
+                            {t.protection_active && t.status === "open" ? (
+                              <span className="text-[9px] font-bold uppercase tracking-wider text-bull">
+                                +2R · +1R protected
+                              </span>
+                            ) : t.tp1_hit && t.status === "open" ? (
+                              <span className="text-[9px] font-bold uppercase tracking-wider text-gold">
+                                BE · TP1 ✓
+                              </span>
+                            ) : null}
+                          </div>
+                        </td>
+                        <td className="px-3 py-2 text-right text-bull">{t.take_profit}</td>
+                        <td className="px-3 py-2 text-right">
+                          <PnlCell trade={t} currentPrice={priceMap[t.pair]} />
+                        </td>
+                        <td className="px-3 py-2 text-center">
+                          <StatusBadge status={t.status} />
+                        </td>
+                        <td className="px-3 py-2 text-right text-muted-foreground">
+                          {new Date(t.opened_at).toLocaleString(undefined, {
+                            month: "short",
+                            day: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <div className="inline-flex flex-wrap items-center justify-end gap-1">
+                            <button
+                              type="button"
+                              disabled={actingId === t.id}
+                              onClick={() => void manualClose(t, "win")}
+                              className="rounded border border-bull/40 bg-bull/10 px-1.5 py-0.5 text-[10px] font-semibold text-bull hover:bg-bull/20 disabled:opacity-50"
+                            >
+                              Close win
+                            </button>
+                            <button
+                              type="button"
+                              disabled={actingId === t.id}
+                              onClick={() => void manualClose(t, "loss")}
+                              className="rounded border border-bear/40 bg-bear/10 px-1.5 py-0.5 text-[10px] font-semibold text-bear hover:bg-bear/20 disabled:opacity-50"
+                            >
+                              Close loss
+                            </button>
+                            <button
+                              type="button"
+                              disabled={actingId === t.id}
+                              onClick={() => void skipTrade(t)}
+                              className="inline-flex items-center gap-0.5 rounded border border-border/60 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted/40 disabled:opacity-50"
+                            >
+                              <Ban className="h-3 w-3" />
+                              Skip
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
 
