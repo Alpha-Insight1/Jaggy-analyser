@@ -9,6 +9,7 @@ import NotFound from "./pages/NotFound.tsx";
 import { AuthProvider, useAuth } from "@/hooks/useAuth";
 import { isSupabaseConfigured } from "@/integrations/supabase/client";
 import { ConfigError } from "@/components/ConfigError";
+import { BrandLogo } from "@/components/BrandLogo";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: false, retry: 1 } },
@@ -17,7 +18,14 @@ const queryClient = new QueryClient({
 const SignedInIndex = () => {
   const { user, loading } = useAuth();
 
-  if (loading) return <div className="min-h-screen surface-0" />;
+  if (loading) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 surface-0 px-4">
+        <BrandLogo size={48} className="shadow-gold" />
+        <p className="text-sm text-muted-foreground">Loading Jaggy Analyser…</p>
+      </div>
+    );
+  }
   if (!user) return <Navigate to="/auth" replace />;
   return <Index />;
 };
