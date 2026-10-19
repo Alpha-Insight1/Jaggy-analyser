@@ -966,6 +966,127 @@ function pairToYahoo(pair: string): string {
   return PAIRS.find((p) => p.pair === pair)?.yfSymbol ?? pair.replace("/", "") + "=X";
 }
 
+// ——— Twelve Data (optional) ———
+// Only used for a short "hot" list: XAU/USD, SPX500, US30, GER40
+// when the pair has an open paper trade or Yahoo marked it near entry.
+// Set secret:  supabase secrets set TWELVE_DATA_API_KEY=your_key
+const TWELVE_DATA_API_KEY = Deno.env.get("TWELVE_DATA_API_KEY") ?? "";
+
+/** App pair → Twelve Data symbol */
+const TWELVE_SYMBOL: Record<string, string> = {
+  "XAU/USD": "XAU/USD",
+  "SPX500": "SPX",
+  "US30": "DJI",
+  "GER40": "DAX",
+};
+
+function isTwelveEligible(pair: string): boolean {
+  return pair in TWELVE_SYMBOL;
+}
+
+const TD_INTERVAL: Record<string, string> = {
+  "1m": "1min",
+  "5m": "5min",
+  "15m": "15min",
+  "30m": "30min",
+  "1h": "1h",
+  "4h": "4h",
+  "1d": "1day",
+};
+
+async function fetchTwelveCandles(
+  pair: string,
+  interval: "4h" | "1h" | "1d" | "5m" | "15m" | "30m",
+  outputsize = 200,
+): Promise<Candle[] | null> {
+  if (!TWELVE_DATA_API_KEY || !isTwelveEligible(pair)) return null;
+  const symbol = TWELVE_SYMBOL[pair];
+  const tdInterval = TD_INTERVAL[interval] ?? interval;
+  const url =
+    `https://api.twelvedata.com/time_series` +
+    `?symbol=${encodeURIComponent(symbol)}` +
+    `&interval=${tdInterval}` +
+    `&outputsize=${outputsize}` +
+    `&order=ASC` +
+    `&apikey=${encodeURIComponent(TWELVE_DATA_API_KEY)}`;
+
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      console.warn(`Twelve Data HTTP ${res.status} for ${pair} ${interval}`);
+      return null;
+    }
+    const j = await res.json() as {
+      status?: string;
+      code?: number;
+      message?: string;
+      values?: Array<{
+        datetime: string;
+        open: string;
+        high: string;
+        low: string;
+        close: string;
+      }>;
+    };
+    if (j.status === "error" || !j.values?.length) {
+      console.warn(`Twelve Data empty/error for ${pair}: ${j.message ?? j.code ?? "no values"}`);
+      return null;
+    }
+    const out: Candle[] = [];
+    for (const v of j.values) {
+      const t = Math.floor(new Date(v.datetime.replace(" ", "T") + "Z").getTime() / 1000);
+      if (!Number.isFinite(t)) continue;
+      const o = parseFloat(v.open);
+      const h = parseFloat(v.high);
+      const l = parseFloat(v.low);
+      const c = parseFloat(v.close);
+      if (![o, h, l, c].every(Number.isFinite)) continue;
+      out.push({ time: t, open: o, high: h, low: l, close: c });
+    }
+    out.sort((a, b) => a.time - b.time);
+    return out.length >= 10 ? out : null;
+  } catch (e) {
+    console.warn(`Twelve Data fetch failed ${pair}:`, e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
+/** Yahoo first; Twelve Data when preferTwelve and pair is eligible. */
+async function fetchCandles(
+  pair: string,
+  interval: "4h" | "1h" | "1d" | "5m" | "15m" | "30m",
+  range: "5d" | "7d" | "1mo" | "3mo" | "6mo" | "1y",
+  preferTwelve = false,
+): Promise<Candle[]> {
+  if (preferTwelve && TWELVE_DATA_API_KEY && isTwelveEligible(pair)) {
+    const size =
+      interval === "5m" || interval === "15m" ? 300 :
+      interval === "1h" ? 200 :
+      interval === "1d" ? 250 : 150;
+    const td = await fetchTwelveCandles(pair, interval, size);
+    if (td && td.length >= 20) return td;
+  }
+  return fetchYahooCandles(pair, interval, range);
+}
+
+async function loadHotTwelvePairs(): Promise<Set<string>> {
+  const hot = new Set<string>();
+  if (!TWELVE_DATA_API_KEY) return hot;
+  try {
+    const { data } = await db
+      .from("trades")
+      .select("pair")
+      .eq("status", "open");
+    for (const row of data ?? []) {
+      if (isTwelveEligible(row.pair)) hot.add(row.pair);
+    }
+  } catch (e) {
+    console.warn("hot list load failed", e);
+  }
+  return hot;
+}
+
+
 async function fetchYahooCandles(
   pair: string,
   interval: "4h" | "1h" | "1d" | "5m" | "15m" | "30m",
@@ -2490,24 +2611,28 @@ Deno.serve(async (req) => {
     resolved: 0,
   };
 
-  // Run pairs in parallel — fetch structure TFs + asset-class entry TF
+  // Hot list: eligible pairs with an open paper trade (Twelve Data preferred)
+  const hotTwelve = await loadHotTwelvePairs();
+  const twelveUsed: string[] = [];
+
+  // Run pairs in parallel — Yahoo broad scan; Twelve Data only for hot gold/SPX/US30/GER40
   const settled = await Promise.allSettled(
     PAIRS.map(async ({ pair }) => {
       const entryInterval = entryTimeframeFor(pair);
-      // Lower TFs need shorter Yahoo ranges
       const entryRange = entryInterval === "5m" || entryInterval === "15m" ? "1mo" : "3mo";
+      let useTwelve = hotTwelve.has(pair);
 
-      const [hourly, daily, entryTf] = await Promise.all([
-        fetchYahooCandles(pair, "1h", "3mo"),
-        fetchYahooCandles(pair, "1d", "1y"),
-        fetchYahooCandles(pair, entryInterval, entryRange as "1mo"),
+      let [hourly, daily, entryTf] = await Promise.all([
+        fetchCandles(pair, "1h", "3mo", useTwelve),
+        fetchCandles(pair, "1d", "1y", useTwelve),
+        fetchCandles(pair, entryInterval, entryRange as "1mo", useTwelve),
       ]);
-      const fourH = resampleTo4H(hourly);
+      if (useTwelve) twelveUsed.push(pair);
 
+      let fourH = resampleTo4H(hourly);
       const { resolved } = await resolveOpenTrades(pair, hourly);
 
-      // Swing path: 1D + 4H structure, entry TF confirmation
-      const { signal, developing } = await analyzePairFromCandles(
+      let { signal, developing } = await analyzePairFromCandles(
         pair,
         fourH,
         daily,
@@ -2519,18 +2644,56 @@ Deno.serve(async (req) => {
         },
       );
 
+      // Near entry on eligible pair but not yet hot → one Twelve Data refresh for tighter levels
+      // proximity is 0–95 from the engine (not 0–1)
+      const nearEntry =
+        isTwelveEligible(pair) &&
+        !useTwelve &&
+        !!TWELVE_DATA_API_KEY &&
+        (signal != null ||
+          (developing != null && Number((developing as { proximity?: number }).proximity ?? 0) >= 55));
+
+      if (nearEntry) {
+        const [h2, d2, e2] = await Promise.all([
+          fetchCandles(pair, "1h", "3mo", true),
+          fetchCandles(pair, "1d", "1y", true),
+          fetchCandles(pair, entryInterval, entryRange as "1mo", true),
+        ]);
+        if (h2.length >= 30 && e2.length >= 20) {
+          hourly = h2;
+          daily = d2;
+          entryTf = e2;
+          fourH = resampleTo4H(hourly);
+          useTwelve = true;
+          twelveUsed.push(`${pair}*`);
+          const again = await analyzePairFromCandles(
+            pair,
+            fourH,
+            daily,
+            entryTf.length >= 30 ? entryTf : hourly,
+            {
+              signalStyle: "swing",
+              structureTf: "4H",
+              entryTf: entryTfLabel(pair),
+            },
+          );
+          signal = again.signal;
+          developing = again.developing;
+        }
+      }
+
       const signals: Signal[] = [];
       if (signal) {
         signals.push(signal);
         await saveSignalToBook(signal);
       }
 
-      // Gold scalp path: 1H trend + 5M BOS (extra signal, does not replace swing)
+      // Gold scalp path: 1H trend + 5M BOS
       if (isGold(pair)) {
         const fiveMin =
           entryInterval === "5m" && entryTf.length >= 40
             ? entryTf
-            : await fetchYahooCandles(pair, "5m", "1mo");
+            : await fetchCandles(pair, "5m", "1mo", useTwelve || nearEntry);
         const scalp = await analyzeGoldScalp(pair, hourly, fiveMin);
         if (scalp) {
           signals.push(scalp);
@@ -2538,7 +2701,7 @@ Deno.serve(async (req) => {
         }
       }
 
-      return { pair, signals, developing, resolved };
+      return { pair, signals, developing, resolved, dataSource: useTwelve ? "twelve" : "yahoo" };
     }),
   );
 
@@ -2557,6 +2720,9 @@ Deno.serve(async (req) => {
 
   results.signals.sort((a, b) => b.confidence - a.confidence);
   results.developing.sort((a, b) => b.proximity - a.proximity);
+  // Attach feed meta for debugging (ignored by UI if unused)
+  (results as Record<string, unknown>).twelveDataEnabled = Boolean(TWELVE_DATA_API_KEY);
+  (results as Record<string, unknown>).twelveDataPairs = [...new Set(twelveUsed)];
 
   return new Response(JSON.stringify(results), {
     status: 200,
