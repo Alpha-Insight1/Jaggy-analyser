@@ -2,7 +2,8 @@ project_id = "wkgdlkijfgjebwlgdpcf"
 
 # Requires a signed-in user's JWT (the function also re-validates it with getUser()).
 [functions.forex-analysis]
-verify_jwt = true
+# false so cron can call with x-cron-secret (function still checks user JWT or cron secret)
+verify_jwt = false
 
 # Called by an MT5 Expert Advisor with a private x-ea-token header, NOT a Supabase
 # JWT. The function authenticates the token itself (SHA-256 lookup in ea_tokens),

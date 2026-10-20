@@ -72,17 +72,27 @@ export function realizedR(t: TradeRow): number {
   if (t.status === "open") return 0;
   const risk = Math.abs(Number(t.entry) - Number(t.initial_stop_loss ?? t.stop_loss));
   if (risk > 0 && t.close_price != null && Number.isFinite(Number(t.close_price))) {
+    const entry = Number(t.entry);
+    const close = Number(t.close_price);
+    // Impossible exit (e.g. GER40 exit 83009 vs entry ~25k) → ignore close, use safe fallback
+    if (entry > 0 && (close > entry * 2.5 || close < entry * 0.4)) {
+      if (t.status === "loss") return -1;
+      const planned = Number(t.risk_reward);
+      if (Number.isFinite(planned) && planned > 0 && planned <= 8) return planned;
+      return 0; // don't poison equity with glitch
+    }
     const move =
-      t.direction === "SELL"
-        ? Number(t.entry) - Number(t.close_price)
-        : Number(t.close_price) - Number(t.entry);
-    return move / risk;
+      t.direction === "SELL" ? entry - close : close - entry;
+    const r = move / risk;
+    if (r > 8) return 8;
+    if (r < -1.5) return -1;
+    return r;
   }
   if (t.status === "loss") return -1;
   if (t.status === "win") {
     if (t.tp1_hit && t.protection_active) return 0;
     const planned = Number(t.risk_reward);
-    if (Number.isFinite(planned) && planned > 0) return Math.min(planned, 5);
+    if (Number.isFinite(planned) && planned > 0) return Math.min(planned, 8);
     return 1.5;
   }
   return 0;

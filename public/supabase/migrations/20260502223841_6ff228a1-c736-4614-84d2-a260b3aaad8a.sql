@@ -1,1 +1,0 @@
-UPDATE public.trades SET stop_loss = entry WHERE status = 'open' AND tp1_hit = true AND stop_loss <> entry;

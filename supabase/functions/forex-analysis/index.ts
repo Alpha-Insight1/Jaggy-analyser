@@ -231,7 +231,7 @@ interface DevelopingSetup {
 // 28 FX pairs + major indices + BTC. Free Yahoo Finance symbols.
 const PAIRS: { pair: string; yfSymbol: string }[] = [
   // Indices & Crypto (institutional flow proxies)
-  { pair: "GER40",   yfSymbol: "^GDAXI" },
+  { pair: "GER40",   yfSymbol: "^GDAXI" },  // Germany 40 / DAX cash index (not CFD quote)
   { pair: "SPX500",  yfSymbol: "^GSPC" },
   { pair: "US30",    yfSymbol: "^DJI" },
   { pair: "NAS100",  yfSymbol: "^NDX" },
@@ -1044,7 +1044,8 @@ async function fetchTwelveCandles(
       out.push({ time: t, open: o, high: h, low: l, close: c });
     }
     out.sort((a, b) => a.time - b.time);
-    return out.length >= 10 ? out : null;
+    const cleaned = filterPlausibleCandles(pair, out);
+    return cleaned.length >= 10 ? cleaned : null;
   } catch (e) {
     console.warn(`Twelve Data fetch failed ${pair}:`, e instanceof Error ? e.message : e);
     return null;
@@ -1145,7 +1146,11 @@ async function fetchYahooCandles(
     if (o == null || h == null || l == null || c == null) continue;
     raw.push({ time: ts[i], open: o, high: h, low: l, close: c });
   }
-  return interval === "4h" ? resampleTo4H(raw) : raw;
+  const cleaned = filterPlausibleCandles(pair, raw);
+  if (cleaned.length < 10) {
+    throw new Error(`Yahoo prices out of band for ${pair} (bad symbol/data)`);
+  }
+  return interval === "4h" ? resampleTo4H(cleaned) : cleaned;
   }
 
 
@@ -2369,10 +2374,18 @@ async function resolveOpenTrades(
     // Best price seen in the trade direction (for MFE / peak R)
     let peakPrice = entryPrice;
 
-    const oneR = Math.abs(entryPrice - originalSL);
+    let oneR = Math.abs(entryPrice - originalSL);
+    // Reject microscopic stops (bad tick / bad SL) that produce 1000R+ glitches
+    const minRisk = Math.max(entryPrice * 0.00015, isIndex(pair) || isGold(pair) || isCrypto(pair) ? 5 : 0);
+    if (oneR > 0 && oneR < minRisk) {
+      console.warn(`Widening tiny oneR for ${pair}: ${oneR} → ${minRisk}`);
+      oneR = minRisk;
+    }
     const rFromPrice = (px: number): number => {
       if (oneR <= 0) return 0;
-      return isBuy ? (px - entryPrice) / oneR : (entryPrice - px) / oneR;
+      const r = isBuy ? (px - entryPrice) / oneR : (entryPrice - px) / oneR;
+      // Hard cap per bar so a bad high/low cannot invent 2000R
+      return Math.max(-2, Math.min(12, r));
     };
 
     for (const c of future) {
@@ -2489,8 +2502,32 @@ async function resolveOpenTrades(
         }
       }
 
-      const bookedR =
+      const MAX_BOOK_R = 8;
+      // Reject impossible index exits (e.g. GER40 @ 83009)
+      if (bookPrice != null && !isPlausiblePrice(pair, bookPrice)) {
+        console.warn(`Implausible close ${bookPrice} for ${pair} — using entry/TP fallback`);
+        if (outcome === "win") {
+          bookPrice = isBuy
+            ? entryPrice + oneR * Math.min(3, MAX_BOOK_R)
+            : entryPrice - oneR * Math.min(3, MAX_BOOK_R);
+          if (!isPlausiblePrice(pair, bookPrice)) bookPrice = entryPrice;
+        } else {
+          bookPrice = originalSL;
+        }
+      }
+
+      let bookedR =
         bookPrice != null && oneR > 0 ? Number(rFromPrice(bookPrice).toFixed(2)) : null;
+      if (bookedR != null) {
+        if (bookedR > MAX_BOOK_R) {
+          console.warn(`Capping absurd R for ${pair}: ${bookedR} → ${MAX_BOOK_R}`);
+          bookedR = MAX_BOOK_R;
+          bookPrice = isBuy
+            ? entryPrice + oneR * MAX_BOOK_R
+            : entryPrice - oneR * MAX_BOOK_R;
+        }
+        if (bookedR < -1.25) bookedR = -1;
+      }
 
       await db
         .from("trades")
@@ -2498,8 +2535,9 @@ async function resolveOpenTrades(
           status: outcome,
           close_price: bookPrice,
           closed_at: new Date((closedAt ?? Date.now() / 1000) * 1000).toISOString(),
-          // Keep risk_reward aligned with what the book actually credits
-          ...(bookedR != null && bookedR > 0 ? { risk_reward: bookedR } : {}),
+          ...(bookedR != null && bookedR > 0
+            ? { risk_reward: Math.min(bookedR, MAX_BOOK_R) }
+            : {}),
         })
         .eq("id", t.id);
       await sendTradePush(
@@ -2527,11 +2565,17 @@ async function saveSignalToBook(s: Signal): Promise<void> {
 
   const { data: openSame } = await db
     .from("trades")
-    .select("id")
+    .select("id, direction")
     .eq("pair", s.pair)
     .eq("status", "open")
-    .limit(1);
-  if (openSame && openSame.length > 0) return;
+    .limit(5);
+  if (openSame && openSame.length > 0) {
+    // No second entry and no BUY→SELL flip while still open
+    console.warn(
+      `Skip ${s.pair} ${s.direction}: already open (${openSame.map((r) => r.direction).join(",")})`,
+    );
+    return;
+  }
 
   // 24h cooldown after any close — avoid revenge re-entries on the same pair
   const cooldownIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -2551,7 +2595,7 @@ async function saveSignalToBook(s: Signal): Promise<void> {
     stop_loss: s.stopLoss,
     take_profit: s.takeProfit,
     take_profit_2: s.takeProfit2,
-    risk_reward: s.riskReward,
+    risk_reward: Math.min(Number(s.riskReward) || 0, 8),
     confidence: s.confidence,
     structure: s.structure,
     htf_bias: s.htf_bias,
@@ -2586,15 +2630,38 @@ Deno.serve(async (req) => {
     });
   }
 
-  const authClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    global: { headers: { Authorization: authorization } },
-  });
-  const { data: authData, error: authError } = await authClient.auth.getUser();
-  if (authError || !authData.user) {
-    return new Response(JSON.stringify({ error: "Sign in to access trade signals." }), {
-      status: 401,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+  // Background cron can scan without a user JWT (phone locked → still get pushes).
+  // Set secret CRON_SECRET and call with header: x-cron-secret: <value>
+  const cronSecret = Deno.env.get("CRON_SECRET") ?? "";
+  const providedCron = req.headers.get("x-cron-secret") ?? "";
+  const isCron =
+    cronSecret.length >= 16 &&
+    providedCron.length >= 16 &&
+    providedCron === cronSecret;
+
+  if (!isCron) {
+    if (!authorization) {
+      return new Response(JSON.stringify({ error: "Sign in to access trade signals." }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    if (!SUPABASE_ANON_KEY) {
+      return new Response(JSON.stringify({ error: "Server auth not configured." }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const authClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authorization } },
     });
+    const { data: authData, error: authError } = await authClient.auth.getUser();
+    if (authError || !authData.user) {
+      return new Response(JSON.stringify({ error: "Sign in to access trade signals." }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
   }
 
   const results: {
@@ -2722,6 +2789,7 @@ Deno.serve(async (req) => {
   results.developing.sort((a, b) => b.proximity - a.proximity);
   // Attach feed meta for debugging (ignored by UI if unused)
   (results as Record<string, unknown>).twelveDataEnabled = Boolean(TWELVE_DATA_API_KEY);
+  (results as Record<string, unknown>).cronTriggered = isCron;
   (results as Record<string, unknown>).twelveDataPairs = [...new Set(twelveUsed)];
 
   return new Response(JSON.stringify(results), {
