@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { ArrowDown, ArrowUp, BookOpen, CheckCircle2, XCircle, Clock, Ban } from "lucide-react";
+import { ArrowDown, ArrowUp, BookOpen, CheckCircle2, XCircle, Clock, Ban, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { realizedR as sharedRealizedR } from "@/lib/tradeStats";
@@ -54,23 +54,43 @@ export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
     setLoading(false);
   }, []);
 
-  /** Manual close at current scan price (or entry if no price). */
+  /** Manual close. mode: win | loss | market (market uses last scan price + auto win/loss). */
   const manualClose = useCallback(
-    async (t: Trade, as: "win" | "loss") => {
+    async (t: Trade, mode: "win" | "loss" | "market") => {
       if (actingId) return;
-      setActingId(t.id);
       const px = priceMap[t.pair];
+      const entry = Number(t.entry);
       const isBuy = t.direction === "BUY";
+
+      let as: "win" | "loss";
       let closePrice: number;
-      if (as === "loss") {
-        closePrice = Number(t.initial_stop_loss ?? t.stop_loss);
-      } else if (px != null) {
+
+      if (mode === "market") {
+        if (px == null) {
+          toast.error("No live price yet", {
+            description: "Wait for a scan, or use Close win / Close loss.",
+          });
+          return;
+        }
         closePrice = px;
+        const favorable = isBuy ? closePrice >= entry : closePrice <= entry;
+        as = favorable ? "win" : "loss";
+      } else if (mode === "loss") {
+        as = "loss";
+        closePrice = Number(t.initial_stop_loss ?? t.stop_loss);
       } else {
-        closePrice = Number(t.entry);
+        as = "win";
+        closePrice = px != null ? px : entry;
       }
-      // If user marks win but price is worse than entry, still allow — they know their fill
-      const { error } = await supabase
+
+      const label =
+        mode === "market"
+          ? `Close ${t.pair} at market ${closePrice}? (${as.toUpperCase()})`
+          : `Mark ${t.pair} as ${as.toUpperCase()} @ ${closePrice}?`;
+      if (!confirm(label)) return;
+
+      setActingId(t.id);
+      const { error, data } = await supabase
         .from("trades")
         .update({
           status: as,
@@ -78,14 +98,30 @@ export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
           closed_at: new Date().toISOString(),
         })
         .eq("id", t.id)
-        .eq("status", "open");
+        .eq("status", "open")
+        .select("id");
+
       setActingId(null);
+
       if (error) {
+        const hint =
+          /row-level security|permission denied|policy/i.test(error.message)
+            ? " Run the trades UPDATE SQL in Supabase (SQL Editor)."
+            : "";
         toast.error("Could not close trade", {
-          description: error.message + " — you may need the trades UPDATE policy (see README).",
+          description: error.message + hint,
+          duration: 10000,
         });
         return;
       }
+      if (!data?.length) {
+        toast.error("Could not close trade", {
+          description: "No open row updated — already closed, or RLS blocked the update.",
+          duration: 10000,
+        });
+        return;
+      }
+
       toast.success(as === "win" ? "Closed as win" : "Closed as loss", {
         description: `${t.pair} @ ${closePrice}`,
       });
@@ -104,7 +140,12 @@ export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
       setActingId(null);
       if (error) {
         toast.error("Could not skip trade", {
-          description: error.message + " — you may need DELETE permission on trades.",
+          description:
+            error.message +
+            (/row-level security|permission denied|policy/i.test(error.message)
+              ? " Run the trades DELETE SQL in Supabase."
+              : ""),
+          duration: 10000,
         });
         return;
       }
@@ -218,25 +259,35 @@ export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
             <BookOpen className="h-4 w-4 text-gold" />
           </div>
           <div>
-            <h2 className="text-sm font-semibold tracking-tight">Your active trades</h2>
+            <h2 className="text-sm font-semibold tracking-tight">Trade book</h2>
             <p className="text-xs text-muted-foreground">
-              Live positions from signals · auto mark-to-market
+              Active first · Close at market, mark win/loss, or skip bad entries
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
           {open > 0 ? (
             <span className="rounded-full border border-bull/40 bg-bull/10 px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wider text-bull">
-              {open} open
+              {open} active
             </span>
           ) : (
             <span className="rounded-full border border-border/60 surface-2 px-2.5 py-0.5 text-[11px] text-muted-foreground">
-              No open positions
+              No active trades
             </span>
           )}
           <span className="text-xs text-muted-foreground">{closed.length} closed</span>
         </div>
       </div>
+      {open === 0 && !loading && (
+        <p className="mb-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+          No active paper trades. When a signal fires it appears here — use <span className="font-medium text-foreground">Close at market</span>, Win, Loss, or Skip.
+        </p>
+      )}
+      {open > 0 && (
+        <p className="mb-3 text-[11px] text-muted-foreground">
+          Tip: <span className="text-foreground">Close at market</span> uses the last scanned price. If close fails, run the trades UPDATE SQL in Supabase.
+        </p>
+      )}
 
       {/* Overall closed R — primary performance readout */}
       <div
@@ -376,7 +427,19 @@ export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
                         minute: "2-digit",
                       })}
                     </p>
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        disabled={actingId === t.id}
+                        onClick={() => void manualClose(t, "market")}
+                        className="col-span-2 min-h-[44px] rounded-md border border-primary/40 bg-primary/10 text-xs font-semibold text-foreground active:scale-[0.98] disabled:opacity-50"
+                      >
+                        {actingId === t.id ? (
+                          <span className="inline-flex items-center gap-1"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Closing…</span>
+                        ) : (
+                          "Close at market"
+                        )}
+                      </button>
                       <button
                         type="button"
                         disabled={actingId === t.id}
@@ -397,9 +460,9 @@ export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
                         type="button"
                         disabled={actingId === t.id}
                         onClick={() => void skipTrade(t)}
-                        className="min-h-[40px] rounded-md border border-border/60 text-xs text-muted-foreground active:scale-[0.98] disabled:opacity-50"
+                        className="col-span-2 min-h-[40px] rounded-md border border-border/60 text-xs text-muted-foreground active:scale-[0.98] disabled:opacity-50"
                       >
-                        Skip
+                        Skip (remove, no stats)
                       </button>
                     </div>
                   </div>
@@ -475,10 +538,18 @@ export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
                             <button
                               type="button"
                               disabled={actingId === t.id}
+                              onClick={() => void manualClose(t, "market")}
+                              className="rounded border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold hover:bg-primary/20 disabled:opacity-50"
+                            >
+                              Market
+                            </button>
+                            <button
+                              type="button"
+                              disabled={actingId === t.id}
                               onClick={() => void manualClose(t, "win")}
                               className="rounded border border-bull/40 bg-bull/10 px-1.5 py-0.5 text-[10px] font-semibold text-bull hover:bg-bull/20 disabled:opacity-50"
                             >
-                              Close win
+                              Win
                             </button>
                             <button
                               type="button"
@@ -486,7 +557,7 @@ export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
                               onClick={() => void manualClose(t, "loss")}
                               className="rounded border border-bear/40 bg-bear/10 px-1.5 py-0.5 text-[10px] font-semibold text-bear hover:bg-bear/20 disabled:opacity-50"
                             >
-                              Close loss
+                              Loss
                             </button>
                             <button
                               type="button"
