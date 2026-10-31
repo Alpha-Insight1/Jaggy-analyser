@@ -37,7 +37,7 @@ export const CapitalPanel = ({ priceMap = {} }: Props) => {
   if (!user) {
     return (
       <section className="mt-10">
-        <div className="flex flex-col items-center gap-3 rounded-xl border border-border/60 surface-1 p-8 text-center">
+        <div className="flex flex-col items-center gap-3 rounded-lg border border-border/60 surface-1 p-8 text-center">
           <Wallet className="h-6 w-6 text-gold" />
           <p className="font-medium">Managed paper capital</p>
           <p className="max-w-md text-sm text-muted-foreground">
@@ -59,7 +59,7 @@ export const CapitalPanel = ({ priceMap = {} }: Props) => {
   if (loading || !account) {
     return (
       <section className="mt-10">
-        <div className="rounded-xl border border-border/60 surface-1 p-8 text-center text-sm text-muted-foreground">
+        <div className="rounded-lg border border-border/60 surface-1 p-8 text-center text-sm text-muted-foreground">
           Loading your account…
         </div>
       </section>
@@ -85,7 +85,7 @@ export const CapitalPanel = ({ priceMap = {} }: Props) => {
         </span>
       </div>
 
-      <div className="rounded-xl border border-border/60 surface-1 p-5">
+      <div className="rounded-lg border border-border/60 surface-1 p-5">
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <Tile label="Equity" value={money(equity, account.currency)} tone={growth >= 0 ? "bull" : "bear"} />
           <Tile label="Cash balance" value={money(Number(account.balance), account.currency)} />

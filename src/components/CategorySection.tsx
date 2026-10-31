@@ -19,14 +19,14 @@ const accentBox: Record<CategoryDef["accent"], string> = {
 };
 
 const accentIcon: Record<CategoryDef["accent"], string> = {
-  gold: "bg-gold/15 text-gold",
+  gold: "bg-gold/15 text-primary",
   bull: "bg-bull/15 text-bull",
   purple: "bg-violet-500/15 text-violet-300",
   default: "surface-2 text-foreground/80",
 };
 
 const accentBadge: Record<CategoryDef["accent"], string> = {
-  gold: "border-gold/40 bg-gold/10 text-gold",
+  gold: "border-gold/40 bg-gold/10 text-primary",
   bull: "border-bull/40 bg-bull/10 text-bull",
   purple: "border-violet-500/40 bg-violet-500/10 text-violet-300",
   default: "border-border/60 surface-2 text-muted-foreground",
@@ -47,7 +47,7 @@ export function CategorySection({
   return (
     <section
       id={id ?? `cat-${cat.id}`}
-      className={cn("scroll-mt-24 rounded-xl border p-3 sm:p-5", accentBox[cat.accent])}
+      className={cn("scroll-mt-24 rounded-lg border p-3 sm:p-5", accentBox[cat.accent])}
     >
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2.5 min-w-0">
@@ -94,7 +94,7 @@ export function CategoryNav({
           className="shrink-0 rounded-full border border-border/60 surface-2 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-gold/40 hover:text-foreground active:scale-[0.98]"
         >
           {it.label}
-          <span className="ml-1.5 font-mono text-gold">{it.count}</span>
+          <span className="ml-1.5 font-mono text-primary">{it.count}</span>
         </a>
       ))}
     </div>

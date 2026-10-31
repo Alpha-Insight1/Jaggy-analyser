@@ -105,7 +105,7 @@ export const EquityCurve = () => {
         )}
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-border/60 surface-1 p-4">
+      <div className="overflow-hidden rounded-lg border border-border/60 surface-1 p-4">
         {loading ? (
           <div className="flex h-48 items-center justify-center text-sm text-muted-foreground">
             Loading…

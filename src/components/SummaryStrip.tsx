@@ -73,12 +73,12 @@ export const SummaryStrip = ({ signals, developing, scanned, failed, loading }: 
         <div
           key={label}
           className={cn(
-            "rounded-xl border p-4 shadow-[var(--shadow-card)] transition-smooth",
+            "rounded-lg border p-4 shadow-card transition-smooth",
             gold && highlight
-              ? "border-gold/50 bg-gold/5"
+              ? "border-primary/40 bg-primary/5"
               : highlight
                 ? "border-border/80 surface-1"
-                : "border-border/60 surface-1",
+                : "border-border/50 surface-1",
             loading && "animate-pulse",
           )}
         >

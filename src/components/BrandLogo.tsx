@@ -1,8 +1,8 @@
 import { cn } from "@/lib/utils";
 
 /**
- * Official Jaggy mark — uses the branded jagged logo asset.
- * Falls back to a compact monogram if the image fails to load.
+ * Official Jaggy mark — geometric jagged logo.
+ * White/ice mark on dark UI; matches the sharp brand identity.
  */
 export const BrandLogo = ({
   className,
@@ -14,14 +14,14 @@ export const BrandLogo = ({
   withWordmark?: boolean;
 }) => (
   <span
-    className={cn("inline-flex shrink-0 items-center gap-2.5", className)}
+    className={cn("inline-flex shrink-0 items-center gap-3", className)}
     aria-label="Jaggy Analyser"
     role="img"
   >
     <span
       className={cn(
-        "relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-xl",
-        "bg-background/80 shadow-[0_0_0_1px_hsl(var(--border)/0.55),0_8px_24px_-12px_rgba(0,0,0,0.55)]",
+        "relative inline-flex shrink-0 items-center justify-center overflow-hidden",
+        "rounded-md bg-transparent",
       )}
       style={{ width: size, height: size }}
     >
@@ -30,19 +30,18 @@ export const BrandLogo = ({
         alt=""
         width={size}
         height={size}
-        className="block h-full w-full object-contain p-1"
+        className="block h-full w-full object-contain"
         onError={(e) => {
-          // Hide broken image; parent still reserves space
           (e.currentTarget as HTMLImageElement).style.display = "none";
         }}
       />
     </span>
     {withWordmark && (
-      <span className="flex flex-col leading-none">
-        <span className="text-[15px] font-semibold tracking-[0.14em] text-foreground">
+      <span className="flex flex-col leading-none select-none">
+        <span className="text-[15px] font-bold tracking-[0.2em] text-foreground">
           JAGGY
         </span>
-        <span className="mt-0.5 text-[10px] font-medium tracking-[0.22em] text-muted-foreground uppercase">
+        <span className="mt-1 text-[9px] font-semibold tracking-[0.28em] text-primary uppercase">
           Analyser
         </span>
       </span>

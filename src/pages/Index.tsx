@@ -130,7 +130,7 @@ const Index = () => {
   return (
     <div className="min-h-screen">
       {/* Header */}
-      <header className="sticky top-0 z-20 border-b border-border/60 surface-1/95 backdrop-blur-md pt-safe">
+      <header className="sticky top-0 z-20 border-b border-border/40 bg-background/80 backdrop-blur-xl pt-safe">
         <div className="container flex flex-col gap-2.5 py-2.5 sm:py-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3 min-w-0">
             <BrandLogo size={40} withWordmark className="shrink-0" />
@@ -145,7 +145,7 @@ const Index = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <div className="flex items-center gap-2 rounded-md border border-border/60 surface-2 px-3 py-1.5 text-xs">
+            <div className="flex items-center gap-2 rounded-md border border-border/50 surface-2 px-3 py-1.5 text-xs">
               <span className="relative flex h-2 w-2">
                 <span
                   className={cn(

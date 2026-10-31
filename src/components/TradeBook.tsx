@@ -293,10 +293,10 @@ export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
       <div
         className={
           closed.length === 0
-            ? "mb-4 rounded-xl border border-border/60 surface-1 p-5"
+            ? "mb-4 rounded-lg border border-border/60 surface-1 p-5"
             : totalR >= 0
-              ? "mb-4 rounded-xl border border-bull/40 bg-bull/5 p-5 ring-1 ring-bull/15"
-              : "mb-4 rounded-xl border border-bear/40 bg-bear/5 p-5 ring-1 ring-bear/15"
+              ? "mb-4 rounded-lg border border-bull/40 bg-bull/5 p-5 ring-1 ring-bull/15"
+              : "mb-4 rounded-lg border border-bear/40 bg-bear/5 p-5 ring-1 ring-bear/15"
         }
       >
         <div className="flex flex-wrap items-end justify-between gap-4">
@@ -343,8 +343,8 @@ export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
       <div
         className={
           openTrades.length > 0
-            ? "overflow-hidden rounded-xl border border-bull/30 surface-1 ring-1 ring-bull/10"
-            : "overflow-hidden rounded-xl border border-border/60 surface-1"
+            ? "overflow-hidden rounded-lg border border-bull/30 surface-1 ring-1 ring-bull/10"
+            : "overflow-hidden rounded-lg border border-border/60 surface-1"
         }
       >
         <div className="flex items-center justify-between border-b border-border/50 surface-2 px-4 py-2.5">
@@ -581,7 +581,7 @@ export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
       </div>
 
       {closed.length > 0 && (
-        <div className="mt-4 rounded-xl border border-border/60 surface-1 p-4">
+        <div className="mt-4 rounded-lg border border-border/60 surface-1 p-4">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Recent closures
@@ -693,7 +693,7 @@ const Stat = ({
   value: string;
   tone: "bull" | "bear" | "gold";
 }) => (
-  <div className="rounded-xl border border-border/60 surface-1 p-4 shadow-card-elev">
+  <div className="rounded-lg border border-border/60 surface-1 p-4 shadow-card">
     <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
     <p
       className={cn(

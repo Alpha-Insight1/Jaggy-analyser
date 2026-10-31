@@ -61,7 +61,7 @@ export const DevelopingSetupCard = ({
   return (
     <div
       className={cn(
-        "fade-in-up relative overflow-hidden rounded-xl border surface-1 p-4 transition-smooth hover:-translate-y-0.5",
+        "fade-in-up relative overflow-hidden rounded-lg border surface-1 p-4 transition-smooth hover:-translate-y-0.5",
         setup.newsMomentum ? "border-gold/40 shadow-gold/20" : "border-border/60"
       )}
       style={{ animationDelay: `${index * 50}ms` }}

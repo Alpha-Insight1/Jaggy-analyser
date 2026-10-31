@@ -82,7 +82,7 @@ export const MarketStatusBanner = () => {
   return (
     <div
       className={cn(
-        "mb-6 flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between",
+        "mb-6 flex flex-col gap-3 rounded-lg border p-4 sm:flex-row sm:items-center sm:justify-between",
         status.blocked
           ? "border-gold/30 bg-gold/5"
           : "border-bull/30 bg-bull/5",

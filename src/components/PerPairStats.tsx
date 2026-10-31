@@ -135,7 +135,7 @@ export const PerPairStats = () => {
       {/* Last 30 days — primary P/L readout */}
       <div
         className={cn(
-          "rounded-xl border p-5",
+          "rounded-lg border p-5",
           last30.trades === 0
             ? "border-border/60 surface-1"
             : last30.netR >= 0
@@ -191,7 +191,7 @@ export const PerPairStats = () => {
       </div>
 
       {/* By style: Forex / Gold / Crypto / Indices */}
-      <div className="rounded-xl border border-border/60 surface-1 p-5">
+      <div className="rounded-lg border border-border/60 surface-1 p-5">
         <div className="mb-4 flex items-center gap-2">
           <Layers className="h-4 w-4 text-gold" />
           <h2 className="text-sm font-semibold tracking-tight">Performance by style</h2>
@@ -242,7 +242,7 @@ export const PerPairStats = () => {
           </h2>
         </div>
 
-        <div className="overflow-hidden rounded-xl border border-border/60 surface-1">
+        <div className="overflow-hidden rounded-lg border border-border/60 surface-1">
           {loading ? (
             <div className="p-6 text-center text-sm text-muted-foreground">Loading…</div>
           ) : pairStats.length === 0 ? (

@@ -27,7 +27,7 @@ const Auth = () => {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 surface-0 px-4">
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background px-4">
         <BrandLogo size={52} withWordmark />
         <p className="text-sm text-muted-foreground">Loading…</p>
       </div>
@@ -62,8 +62,16 @@ const Auth = () => {
   return (
     <div className="grid min-h-screen lg:grid-cols-2">
       {/* Brand panel */}
-      <aside className="relative hidden flex-col justify-between border-r border-border/60 surface-1 p-10 lg:flex">
-        <div className="flex items-center gap-3">
+      <aside className="relative hidden flex-col justify-between overflow-hidden border-r border-border/40 bg-background p-10 lg:flex">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -left-24 top-0 h-72 w-72 rounded-full bg-primary/10 blur-3xl"
+        />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -right-16 bottom-10 h-56 w-56 rounded-full bg-primary/5 blur-3xl"
+        />
+        <div className="relative flex items-center gap-3">
           <BrandLogo size={40} withWordmark />
           <span className="text-lg font-semibold tracking-tight">Jaggy Analyser</span>
         </div>

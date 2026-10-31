@@ -106,12 +106,12 @@ export const SignalCard = ({ signal, index }: { signal: Signal; index: number })
   return (
     <div
       className={cn(
-        "fade-in-up group relative overflow-hidden rounded-xl border surface-1 p-5 shadow-card-elev transition-smooth hover:-translate-y-0.5",
+        "fade-in-up group relative overflow-hidden rounded-lg border border-border/70 surface-1 p-5 shadow-card transition-smooth hover:-translate-y-0.5",
         isScalp
-          ? "border-gold/50 ring-1 ring-gold/20"
+          ? "border-primary/40 ring-1 ring-primary/15"
           : isBuy
-            ? "border-bull/30 hover:shadow-bull"
-            : "border-bear/30 hover:shadow-bear"
+            ? "card-rail-bull border-bull/25 hover:shadow-bull"
+            : "card-rail-bear border-bear/25 hover:shadow-bear"
       )}
       style={{ animationDelay: `${index * 60}ms` }}
     >
