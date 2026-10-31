@@ -1,77 +1,52 @@
 import { cn } from "@/lib/utils";
 
 /**
- * Professional Jaggy Analyser mark.
- * Inline SVG so the logo still shows if /logo.svg fails to load (CDN/path issues).
+ * Official Jaggy mark — uses the branded jagged logo asset.
+ * Falls back to a compact monogram if the image fails to load.
  */
 export const BrandLogo = ({
   className,
-  size = 36,
+  size = 40,
+  withWordmark = false,
 }: {
   className?: string;
   size?: number;
+  withWordmark?: boolean;
 }) => (
   <span
-    className={cn(
-      "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-lg",
-      "shadow-[0_0_0_1px_hsl(var(--border)/0.45)]",
-      className,
-    )}
-    style={{ width: size, height: size }}
+    className={cn("inline-flex shrink-0 items-center gap-2.5", className)}
     aria-label="Jaggy Analyser"
     role="img"
   >
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 64 64"
-      width={size}
-      height={size}
-      className="block"
-      aria-hidden
+    <span
+      className={cn(
+        "relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-xl",
+        "bg-background/80 shadow-[0_0_0_1px_hsl(var(--border)/0.55),0_8px_24px_-12px_rgba(0,0,0,0.55)]",
+      )}
+      style={{ width: size, height: size }}
     >
-      <defs>
-        <linearGradient id="jaggyGold" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#E8C36A" />
-          <stop offset="1" stopColor="#C9A227" />
-        </linearGradient>
-      </defs>
-      <rect width="64" height="64" rx="14" fill="#0B0D12" />
-      <rect
-        x="1.5"
-        y="1.5"
-        width="61"
-        height="61"
-        rx="12.5"
-        stroke="url(#jaggyGold)"
-        strokeWidth="1.5"
-        opacity="0.9"
-        fill="none"
+      <img
+        src={`${import.meta.env.BASE_URL}logo-jaggy.png`}
+        alt=""
+        width={size}
+        height={size}
+        className="block h-full w-full object-contain p-1"
+        onError={(e) => {
+          // Hide broken image; parent still reserves space
+          (e.currentTarget as HTMLImageElement).style.display = "none";
+        }}
       />
-      {/* J */}
-      <path
-        d="M18 42 V22 h6.5 c6.2 0 10.2 3.2 10.2 9.2 0 6.1-4 9.3-10.2 9.3H18z"
-        fill="url(#jaggyGold)"
-      />
-      <path
-        d="M24.5 27.2h0.2c2.6 0 4.2 1.4 4.2 3.9s-1.6 4-4.2 4h-0.2v-7.9z"
-        fill="#0B0D12"
-      />
-      {/* A */}
-      <path
-        d="M38 22 h6.2 v14.2 c0 4.6 2.4 6.6 6.3 6.6.6 0 1.3-.05 1.9-.15v5.1c-.8.2-1.8.3-2.9.3-7.1 0-11.5-3.9-11.5-11.7V22z"
-        fill="url(#jaggyGold)"
-      />
-      {/* chart accent */}
-      <path
-        d="M14 48 L24 40 L32 44 L42 32 L50 36"
-        stroke="url(#jaggyGold)"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity="0.55"
-        fill="none"
-      />
-    </svg>
+    </span>
+    {withWordmark && (
+      <span className="flex flex-col leading-none">
+        <span className="text-[15px] font-semibold tracking-[0.14em] text-foreground">
+          JAGGY
+        </span>
+        <span className="mt-0.5 text-[10px] font-medium tracking-[0.22em] text-muted-foreground uppercase">
+          Analyser
+        </span>
+      </span>
+    )}
   </span>
 );
 

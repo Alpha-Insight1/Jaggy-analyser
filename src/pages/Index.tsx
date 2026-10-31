@@ -132,13 +132,14 @@ const Index = () => {
       {/* Header */}
       <header className="sticky top-0 z-20 border-b border-border/60 surface-1/95 backdrop-blur-md pt-safe">
         <div className="container flex flex-col gap-2.5 py-2.5 sm:py-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <BrandLogo size={32} className="shadow-gold shrink-0 sm:h-9 sm:w-9" />
-            <div className="leading-tight min-w-0">
-              <h1 className="text-sm sm:text-base font-semibold tracking-tight truncate">Jaggy Analyser</h1>
-              <p className="text-[10px] sm:text-[11px] text-muted-foreground truncate">
-                <span className="sm:hidden">SMC · multi-TF signals</span>
-                <span className="hidden sm:inline">SMC multi-TF desk · Forex 15M · Indices/Gold 5M · Gold scalp</span>
+          <div className="flex items-center gap-3 min-w-0">
+            <BrandLogo size={40} withWordmark className="shrink-0" />
+            <div className="hidden leading-tight min-w-0 border-l border-border/50 pl-3 sm:block">
+              <p className="text-[11px] text-muted-foreground truncate">
+                SMC multi-TF desk · Forex 15M · Indices/Gold 5M · Gold scalp
+              </p>
+              <p className="text-[10px] text-muted-foreground/80 truncate">
+                A+ auto-book · structure TP · session filters
               </p>
             </div>
           </div>

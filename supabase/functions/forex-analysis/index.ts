@@ -3,7 +3,9 @@
 // Entry TF by asset class:
 //   Forex  → 15M confirmation (swing)
 //   Indices → 5M confirmation (swing)
-//   Gold   → 5M confirmation (swing) + separate 1H→5M BOS scalp
+//   Gold   → 5M confirmation (swing) + 1H→5M BOS/CHoCH+disp scalp
+// Strategy pack: A sessions · B A+/B grade · C gold pullback · D structure bias · E trail · F corr caps
+// Pro refinements: ranked OTE/FVG inside OB · impulse-leg discount/premium · soft BE after TP1 · feature logging
 // Risk model: ATR(14)-based stop on structure TF, tighter ATR on scalp
 // Persists signals in `trades` and resolves them bar-by-bar
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
@@ -197,6 +199,7 @@ interface Signal {
   // Multi-TF labels
   signalStyle?: "swing" | "scalp";
   structureTimeframe?: string;  // e.g. "4H" or "1H"
+  setupGrade?: "A+" | "B";
   entryTimeframe?: string;      // e.g. "15M" | "5M"
 
 }
@@ -809,8 +812,9 @@ function resampleTo4H(hourly: Candle[]): Candle[] {
 // Outside these windows, smart-money setups usually fail or chop.
 function inKillZone(time: number): { active: boolean; session: "London" | "NewYork" | null } {
   const h = new Date(time * 1000).getUTCHours();
-  if (h >= 7 && h < 10) return { active: true, session: "London" };
-  if (h >= 12 && h < 15) return { active: true, session: "NewYork" };
+  // London open + NY open/overlap — institutional volume windows
+  if (h >= 7 && h < 11) return { active: true, session: "London" };
+  if (h >= 12 && h < 17) return { active: true, session: "NewYork" };
   return { active: false, session: null };
 }
 
@@ -819,13 +823,15 @@ function inKillZone(time: number): { active: boolean; session: "London" | "NewYo
 // or FX outside London/NY is where most low-quality fills come from.
 function sessionWindow(pair: string): { start: number; end: number; label: string } | null {
   if (isCrypto(pair)) return null; // 24/7
-  if (isGold(pair)) return { start: 1, end: 22, label: "Gold London–NY" }; // nearly 24h weekdays
+  // Gold: London open through NY afternoon (avoid pure Asia dead zone for new entries)
+  if (isGold(pair)) return { start: 7, end: 20, label: "Gold London–NY" };
   if (isIndex(pair)) {
     if (pair === "JPN225") return { start: 0, end: 6, label: "Tokyo cash" };
-    if (pair === "GER40" || pair === "UK100") return { start: 7, end: 15.5, label: "Europe cash" };
-    return { start: 13.5, end: 20, label: "US cash" }; // SPX500 / US30 / NAS100
+    if (pair === "GER40" || pair === "UK100") return { start: 7, end: 16, label: "Europe cash" };
+    return { start: 13.5, end: 20.5, label: "US cash" }; // SPX500 / US30 / NAS100
   }
-  return { start: 7, end: 16, label: "London–NY overlap window" }; // FX
+  // FX: London through NY (07–20 UTC) — still blocks pure Asia for new entries
+  return { start: 7, end: 20, label: "London–NY FX window" };
 }
 
 function inTradingSession(pair: string, d: Date): { ok: boolean; label: string } {
@@ -962,6 +968,45 @@ function findLiquiditySweep(
 
 // SWING TRADING: 4H structure (resampled from 1h) + Daily HTF bias
 
+
+// ---- Price sanity (prevents GER40@80k-style glitches) ----
+function priceBand(pair: string): { min: number; max: number } | null {
+  if (isGold(pair)) return { min: 500, max: 10000 };
+  if (isCrypto(pair)) {
+    if (pair.startsWith("BTC")) return { min: 1000, max: 500000 };
+    if (pair.startsWith("ETH")) return { min: 50, max: 50000 };
+    return { min: 0.01, max: 500000 };
+  }
+  if (pair === "GER40") return { min: 5000, max: 30000 };
+  if (pair === "US30") return { min: 15000, max: 60000 };
+  if (pair === "NAS100") return { min: 5000, max: 40000 };
+  if (pair === "SPX500") return { min: 1500, max: 10000 };
+  if (pair === "UK100") return { min: 4000, max: 15000 };
+  if (pair === "JPN225") return { min: 10000, max: 60000 };
+  // FX majors / crosses
+  if (pair.includes("JPY")) return { min: 50, max: 300 };
+  if (pair.includes("/")) return { min: 0.2, max: 5 };
+  return null;
+}
+
+function isPlausiblePrice(pair: string, price: number): boolean {
+  if (!Number.isFinite(price) || price <= 0) return false;
+  const band = priceBand(pair);
+  if (!band) return true;
+  return price >= band.min && price <= band.max;
+}
+
+function filterPlausibleCandles(pair: string, candles: Candle[]): Candle[] {
+  return candles.filter(
+    (c) =>
+      isPlausiblePrice(pair, c.open) &&
+      isPlausiblePrice(pair, c.high) &&
+      isPlausiblePrice(pair, c.low) &&
+      isPlausiblePrice(pair, c.close) &&
+      c.high >= c.low,
+  );
+}
+
 function pairToYahoo(pair: string): string {
   return PAIRS.find((p) => p.pair === pair)?.yfSymbol ?? pair.replace("/", "") + "=X";
 }
@@ -973,15 +1018,20 @@ function pairToYahoo(pair: string): string {
 const TWELVE_DATA_API_KEY = Deno.env.get("TWELVE_DATA_API_KEY") ?? "";
 
 /** App pair → Twelve Data symbol */
+/** Twelve Data ONLY for gold + indices (user rule). Forex = Yahoo only. */
 const TWELVE_SYMBOL: Record<string, string> = {
   "XAU/USD": "XAU/USD",
   "SPX500": "SPX",
   "US30": "DJI",
   "GER40": "DAX",
+  "NAS100": "IXIC",
+  "UK100": "UKX",
+  "JPN225": "NI225",
 };
 
 function isTwelveEligible(pair: string): boolean {
-  return pair in TWELVE_SYMBOL;
+  // Strict: gold and indices only — never FX
+  return (isGold(pair) || isIndex(pair)) && pair in TWELVE_SYMBOL;
 }
 
 const TD_INTERVAL: Record<string, string> = {
@@ -1052,22 +1102,61 @@ async function fetchTwelveCandles(
   }
 }
 
-/** Yahoo first; Twelve Data when preferTwelve and pair is eligible. */
+// In-isolate candle cache — skips Yahoo re-fetch on rapid refreshes (TTL 10 min).
+const CANDLE_CACHE_TTL_MS = 10 * 60 * 1000;
+const candleCache = new Map<string, { bars: Candle[]; expires: number }>();
+
+/** Forex → Yahoo only. Gold/indices → Twelve first when preferTwelve, Yahoo backup. */
 async function fetchCandles(
   pair: string,
   interval: "4h" | "1h" | "1d" | "5m" | "15m" | "30m",
   range: "5d" | "7d" | "1mo" | "3mo" | "6mo" | "1y",
   preferTwelve = false,
 ): Promise<Candle[]> {
-  if (preferTwelve && TWELVE_DATA_API_KEY && isTwelveEligible(pair)) {
-    const size =
-      interval === "5m" || interval === "15m" ? 300 :
-      interval === "1h" ? 200 :
-      interval === "1d" ? 250 : 150;
-    const td = await fetchTwelveCandles(pair, interval, size);
-    if (td && td.length >= 20) return td;
+  const key = `${pair}|${interval}|${range}|${preferTwelve ? "td" : "y"}`;
+  const hit = candleCache.get(key);
+  if (hit && hit.expires > Date.now() && hit.bars.length >= 20) {
+    return hit.bars;
   }
-  return fetchYahooCandles(pair, interval, range);
+
+  const size =
+    interval === "5m" || interval === "15m" ? 300 :
+    interval === "1h" ? 200 :
+    interval === "1d" ? 250 : 150;
+
+  const tryTwelve = async (): Promise<Candle[] | null> => {
+    if (!TWELVE_DATA_API_KEY || !isTwelveEligible(pair)) return null;
+    const td = await fetchTwelveCandles(pair, interval, size);
+    return td && td.length >= 20 ? td : null;
+  };
+
+  let bars: Candle[] | null = null;
+
+  if (preferTwelve) {
+    bars = await tryTwelve();
+  }
+
+  if (!bars) {
+    try {
+      bars = await fetchYahooCandles(pair, interval, range);
+    } catch (yahooErr) {
+      bars = await tryTwelve();
+      if (bars) {
+        console.warn(
+          `Yahoo failed for ${pair} (${yahooErr instanceof Error ? yahooErr.message : yahooErr}) — using Twelve Data`,
+        );
+      } else {
+        throw yahooErr;
+      }
+    }
+  }
+
+  candleCache.set(key, { bars, expires: Date.now() + CANDLE_CACHE_TTL_MS });
+  if (candleCache.size > 200) {
+    const first = candleCache.keys().next().value;
+    if (first) candleCache.delete(first);
+  }
+  return bars;
 }
 
 async function loadHotTwelvePairs(): Promise<Set<string>> {
@@ -1103,27 +1192,24 @@ async function fetchYahooCandles(
   // Yahoo Finance occasionally returns 5xx under load — retry once with backoff,
   // and fall back to query2 host on persistent failure.
   const fetchWithRetry = async (u: string): Promise<Response> => {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const res = await fetch(u, {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          Accept: "application/json",
-        },
-      });
+    const headers = {
+      "User-Agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      Accept: "application/json",
+    };
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const res = await fetch(u, { headers });
       if (res.ok) return res;
-      if (res.status < 500) return res; // 4xx — don't retry
-      await res.body?.cancel();
-      await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+      // Retry 429 and 5xx with backoff (Yahoo rate limits)
+      if (res.status === 429 || res.status >= 500) {
+        await res.body?.cancel();
+        await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+        continue;
+      }
+      return res; // other 4xx — don't spin
     }
     // Final fallback to query2 host
-    return fetch(u.replace("query1.finance", "query2.finance"), {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        Accept: "application/json",
-      },
-    });
+    return fetch(u.replace("query1.finance", "query2.finance"), { headers });
   };
 
   const r = await fetchWithRetry(url);
@@ -1390,21 +1476,42 @@ async function analyzePairFromCandles(
   const ema50 = ema(htfCloses, 50);
   // Per-asset bias separation: tighter for FX (low daily vol), wider for crypto/indices.
   const biasSep = isCrypto(pair) ? 0.010 : (isIndex(pair) || isGold(pair)) ? 0.0035 : 0.0015;
-  const htf_bias: "Bullish" | "Bearish" | "Neutral" =
+  const emaDailyBias: "Bullish" | "Bearish" | "Neutral" =
     ema20 > ema50 * (1 + biasSep) ? "Bullish"
     : ema20 < ema50 * (1 - biasSep) ? "Bearish"
     : "Neutral";
 
-  // 4H bias (from 4H closes) — must AGREE with Daily bias to define market direction.
-  // Daily = macro trend, 4H = swing trend. Alignment of both = the "Market Direction"
-  // filter the user asked for. 1H/30m is used below for the actual entry trigger.
+  // D: Structure-primary Daily bias — swing structure leads; EMA only confirms / softens.
+  const dailySwings = findSwings(htfTail.slice(-80), 2);
+  const dailyStruct = analyzeStructure(htfTail.slice(-80), dailySwings);
+  let htf_bias: "Bullish" | "Bearish" | "Neutral" = "Neutral";
+  if (dailyStruct.trend === "Bullish" || dailyStruct.trend === "Bearish") {
+    htf_bias = dailyStruct.trend;
+    // Soft conflict: structure bullish but EMA clearly bearish → Neutral (range / late)
+    if (emaDailyBias !== "Neutral" && emaDailyBias !== htf_bias) {
+      htf_bias = "Neutral";
+    }
+  } else {
+    htf_bias = emaDailyBias; // fallback when structure unclear
+  }
+
+  // 4H bias — structure first, EMA soft confirm
   const ltfCloses = ltfTail.map((c) => c.close);
   const ltfEma20 = ema(ltfCloses.slice(-60), 20);
   const ltfEma50 = ema(ltfCloses, 50);
-  const h4_bias: "Bullish" | "Bearish" | "Neutral" =
+  const emaH4Bias: "Bullish" | "Bearish" | "Neutral" =
     ltfEma20 > ltfEma50 * (1 + biasSep * 0.6) ? "Bullish"
     : ltfEma20 < ltfEma50 * (1 - biasSep * 0.6) ? "Bearish"
     : "Neutral";
+  let h4_bias: "Bullish" | "Bearish" | "Neutral" = "Neutral";
+  if (structure.trend === "Bullish" || structure.trend === "Bearish") {
+    h4_bias = structure.trend;
+    if (emaH4Bias !== "Neutral" && emaH4Bias !== h4_bias) {
+      h4_bias = "Neutral";
+    }
+  } else {
+    h4_bias = emaH4Bias;
+  }
   const marketDirectionAligned =
     htf_bias !== "Neutral" && h4_bias === htf_bias;
 
@@ -1855,26 +1962,79 @@ async function analyzePairFromCandles(
 
   const p = pip(pair);
 
-  // ---- ORDER BLOCK ENTRY (only model used) ----
-  // Professional OB execution: fill at the block's mean threshold (50% of the
-  // OB body range) rather than the proximal edge — better average price, still
-  // inside the institutional zone. If price has already traded past the mean,
-  // fall back to the proximal edge so the entry remains reachable.
+  // ---- PROFESSIONAL ENTRY MODEL (ranked) ----
+  // OB remains the structural anchor. Prefer a cleaner fill inside/near the OB:
+  //   1) OTE (70.5% of the impulse leg that created the OB)
+  //   2) Unmitigated FVG midpoint inside or just beyond the OB
+  //   3) Fallback: OB mean (50%) or proximal edge if mean already traded through
+  // Pure proximal OB is the most common retail trap — ranked models avoid it.
   const obZone: EntryZone = { top: ob.top, bottom: ob.bottom };
   const obProximal = direction === "BUY" ? ob.top : ob.bottom;
   const obMean = (ob.top + ob.bottom) / 2;
   const meanReachable = direction === "BUY" ? currentPrice > obMean : currentPrice < obMean;
-  const entry = Number((meanReachable ? obMean : obProximal).toFixed(priceDecimals(pair)));
-  const entryZone: EntryZone = obZone;
-  const entryModel: "OTE" | "FVG" | "Breaker" | "Judas" | "OB" = "OB";
+  const obFallbackPrice = meanReachable ? obMean : obProximal;
 
+  const oteCand = computeOTE(ltfTail, swings, direction);
+  const fvgCand = fvgEntry(fvg, direction, swings);
+  // Only accept OTE/FVG when they sit inside the OB or within 0.35×ATR beyond it
+  // (still in the institutional zone, not chasing).
+  const nearOb = (price: number) => {
+    const inOb = price >= ob.bottom && price <= ob.top;
+    const dist = direction === "BUY"
+      ? Math.max(0, ob.bottom - price)
+      : Math.max(0, price - ob.top);
+    return inOb || dist <= atrVal * 0.35;
+  };
+  const ranked: (ProEntry | null)[] = [];
+  if (oteCand && nearOb(oteCand.price)) ranked.push(oteCand);
+  if (fvgCand && nearOb(fvgCand.price)) ranked.push(fvgCand);
+  const pro = pickBestProEntry(ranked, currentPrice, atrVal);
 
-  // GATE 10d: DISCOUNT/PREMIUM filter (SMC OTE range).
-  // Entry must sit in the discount half (BUY) / premium half (SELL) of the
-  // recent 60-bar dealing range — never enter at parity or worse.
-  const rangeWindow = ltfTail.slice(-60);
-  const rangeHigh = Math.max(...rangeWindow.map((c) => c.high));
-  const rangeLow = Math.min(...rangeWindow.map((c) => c.low));
+  let entry = Number((pro ? pro.price : obFallbackPrice).toFixed(priceDecimals(pair)));
+  let entryZone: EntryZone = pro ? pro.zone : obZone;
+  let entryModel: "OTE" | "FVG" | "Breaker" | "Judas" | "OB" = pro ? pro.model : "OB";
+  // Keep zone at least as wide as the OB so confirmation candle logic still works
+  if (pro) {
+    entryZone = {
+      top: Math.max(pro.zone.top, ob.top),
+      bottom: Math.min(pro.zone.bottom, ob.bottom),
+    };
+  }
+
+  // GATE 10d: DISCOUNT/PREMIUM relative to the impulse that formed the OB
+  // (or the most recent Daily range). Never use a generic 60-bar window —
+  // that still lets mid-range entries on choppy days.
+  let rangeHigh: number;
+  let rangeLow: number;
+  // Prefer the swing high/low that brackets the OB index (true impulse leg)
+  const obSwingHighs = swings.filter((s) => s.type === "high" && s.index <= ob.index + 2);
+  const obSwingLows = swings.filter((s) => s.type === "low" && s.index <= ob.index + 2);
+  if (direction === "BUY" && obSwingLows.length && obSwingHighs.length) {
+    const legLow = obSwingLows.reduce((a, b) => (a.price < b.price ? a : b));
+    const legHigh = obSwingHighs.filter((s) => s.index >= legLow.index).reduce(
+      (a, b) => (a.price > b.price ? a : b),
+      obSwingHighs[obSwingHighs.length - 1],
+    );
+    rangeLow = legLow.price;
+    rangeHigh = legHigh.price;
+  } else if (direction === "SELL" && obSwingHighs.length && obSwingLows.length) {
+    const legHigh = obSwingHighs.reduce((a, b) => (a.price > b.price ? a : b));
+    const legLow = obSwingLows.filter((s) => s.index >= legHigh.index).reduce(
+      (a, b) => (a.price < b.price ? a : b),
+      obSwingLows[obSwingLows.length - 1],
+    );
+    rangeHigh = legHigh.price;
+    rangeLow = legLow.price;
+  } else if (htfTail.length >= 10) {
+    // Fallback: most recent Daily dealing range
+    const dTail = htfTail.slice(-20);
+    rangeHigh = Math.max(...dTail.map((c) => c.high));
+    rangeLow = Math.min(...dTail.map((c) => c.low));
+  } else {
+    const rangeWindow = ltfTail.slice(-60);
+    rangeHigh = Math.max(...rangeWindow.map((c) => c.high));
+    rangeLow = Math.min(...rangeWindow.map((c) => c.low));
+  }
   const rangeMid = (rangeHigh + rangeLow) / 2;
   const rangeSize = Math.max(rangeHigh - rangeLow, 1e-9);
   const offMid = direction === "BUY" ? (entry - rangeMid) / rangeSize : (rangeMid - entry) / rangeSize;
@@ -2092,6 +2252,13 @@ async function analyzePairFromCandles(
   confluences.push(
     `Risk: ${pips.toFixed(0)} pips · TP1: ${(pips * rr1).toFixed(0)} pips (${rr1}R) · TP2: ${(pips * rr2).toFixed(0)} pips (${rr2}R)`,
   );
+  {
+    const gradeIsA =
+      marketDirectionAligned &&
+      confidence >= 78 &&
+      (kz.active || inTradingSession(pair, new Date(lastCandle.time * 1000)).ok);
+    confluences.push(gradeIsA ? "Grade A+ · auto-book eligible" : "Grade B · developing / no auto-book");
+  }
 
 
   confidence = Math.max(20, Math.min(98, confidence - qualityPenalty));
@@ -2197,9 +2364,12 @@ async function analyzePairFromCandles(
       signalStyle,
       structureTimeframe: structureTfLabel,
       entryTimeframe: entryTfName,
+      // B: A+ = HTF aligned + high confidence + session/kill-zone quality
+      setupGrade: (marketDirectionAligned && confidence >= 78 && (kz.active || inTradingSession(pair, new Date(lastCandle.time * 1000)).ok))
+        ? "A+"
+        : "B",
     },
     developing: null,
-
   };
 }
 
@@ -2225,13 +2395,29 @@ async function analyzeGoldScalp(
 
   const mSwings = findSwings(mTail, 2);
   const mStruct = analyzeStructure(mTail, mSwings);
-  // Require a clear 5M BOS (prefer BOS over CHoCH for scalps)
-  if (mStruct.trend !== wantTrend || mStruct.structure !== "BOS") return null;
-
+  // C Option 2: 5M BOS preferred; also allow CHoCH + displacement in 1H trend direction
+  // (pullback continuation — not random counter-trend noise)
+  if (mStruct.trend !== wantTrend || !mStruct.structure) return null;
   const last = mTail[mTail.length - 1];
-  const currentPrice = last.close;
+  const prev = mTail.length >= 2 ? mTail[mTail.length - 2] : last;
   const atrVal = atr(mTail, 14);
   if (atrVal <= 0) return null;
+  const body = Math.abs(last.close - last.open);
+  const displacement = body >= atrVal * 1.15;
+  const bullishClose = last.close > last.open;
+  const bearishClose = last.close < last.open;
+  const dispWithTrend =
+    (wantTrend === "Bullish" && bullishClose && displacement) ||
+    (wantTrend === "Bearish" && bearishClose && displacement);
+  const bosOk = mStruct.structure === "BOS";
+  const chochOk = mStruct.structure === "CHoCH" && dispWithTrend;
+  if (!bosOk && !chochOk) return null;
+
+  // Session filter for gold scalp (A)
+  const sess = inTradingSession(pair, new Date(last.time * 1000));
+  if (!sess.ok) return null;
+
+  const currentPrice = last.close;
 
   // Prefer entry on retest of the 5M OB created by the break
   const mObs = findOrderBlocks(mTail, mSwings).filter((o) =>
@@ -2320,16 +2506,17 @@ async function analyzeGoldScalp(
       bottom: Number(entryZone.bottom.toFixed(decimals)),
     },
     signalStyle: "scalp",
+    setupGrade: bosOk ? "A+" : "B",
     structureTimeframe: "1H",
     entryTimeframe: "5M",
   };
 }
 
 // Resolve open trades using two-stage logic + peak R (MFE) accounting:
-// 1. If TP1 not yet hit: hit TP1 → mark tp1_hit=true, move SL to break-even (entry).
-//    Hit SL first → loss.
-// 2. If TP1 already hit: hit TP2 → win at TP2. Hit BE-stop → win.
-// 3. Book close uses peak favorable price when it exceeds exit (e.g. +5R then BE → +5R).
+// 1. Hit TP1 → mark tp1_hit=true, move SL to soft buffer (−0.05R), NOT exact entry.
+// 2. At +2R → lock +1R (protection). At +3R → trail to +1.5R.
+// 3. True BE / +0.5R upgrade occurs when protection is active (structure-style lock).
+// 4. Book close uses peak favorable price when it exceeds exit (e.g. +5R then BE → +5R).
 async function resolveOpenTrades(
   pair: string,
   candles: Candle[],
@@ -2427,10 +2614,36 @@ async function resolveOpenTrades(
         );
       }
 
+      // E: Trail to +1.5R once price has seen +3R (structure-style runner lock)
+      if (protectionActive && oneR > 0) {
+        const threeR = isBuy ? entryPrice + oneR * 3 : entryPrice - oneR * 3;
+        const lock15 = isBuy ? entryPrice + oneR * 1.5 : entryPrice - oneR * 1.5;
+        const sawThree = isBuy ? peakPrice >= threeR : peakPrice <= threeR;
+        if (sawThree && protectedStop != null) {
+          const better = isBuy ? lock15 > protectedStop : lock15 < protectedStop;
+          if (better) {
+            protectedStop = lock15;
+            await db
+              .from("trades")
+              .update({
+                protected_stop_loss: lock15,
+                stop_loss: lock15,
+              })
+              .eq("id", t.id);
+          }
+        }
+      }
+
+      // Soft buffer after TP1: −0.2R (slightly in profit) to +0.1R (tiny give-back).
+      // Exact BE is only applied after LTF structure confirmation (see below).
+      const softBeBuffer = oneR * 0.05; // midpoint of −0.2R…+0.1R band ≈ small cushion
+      const softBeSL = isBuy
+        ? entryPrice - oneR * 0.05   // −0.05R (tiny give-back side of the band)
+        : entryPrice + oneR * 0.05;
       const activeSL = protectionActive && protectedStop != null
         ? protectedStop
         : tp1Hit
-          ? entryPrice
+          ? softBeSL
           : originalSL;
       const hitSL = isBuy ? c.low <= activeSL : c.high >= activeSL;
 
@@ -2553,6 +2766,22 @@ async function resolveOpenTrades(
   return { resolved };
 }
 
+
+// ---- F: Correlation groups + frequency caps ----
+function correlationGroup(pair: string): string {
+  const p = pair.toUpperCase().replace("/", "");
+  if (p.includes("XAU") || p.startsWith("GOLD")) return "GOLD";
+  if (["SPX500", "US30", "NAS100", "SPX"].some((x) => p.includes(x))) return "US_INDEX";
+  if (["GER40", "UK100", "EU50"].some((x) => p.includes(x))) return "EU_INDEX";
+  if (p.includes("JPN") || p.includes("JP225")) return "JP_INDEX";
+  if (p.startsWith("EUR") || p.endsWith("EUR")) return "EUR";
+  if (p.startsWith("GBP") || p.endsWith("GBP")) return "GBP";
+  if (p.includes("JPY")) return "JPY";
+  if (p.startsWith("AUD") || p.startsWith("NZD")) return "AUDNZD";
+  if (p.startsWith("USD") || p.endsWith("USD")) return "USD_CROSS";
+  return p;
+}
+
 // Save a freshly detected signal to the trade book (idempotent on pair+timestamp).
 async function saveSignalToBook(s: Signal): Promise<void> {
   const { data: existing } = await db
@@ -2586,7 +2815,56 @@ async function saveSignalToBook(s: Signal): Promise<void> {
     .in("status", ["win", "loss"])
     .gte("closed_at", cooldownIso)
     .limit(1);
-  if (recentClosed && recentClosed.length > 0) return;
+  if (recentClosed && recentClosed.length > 0) {
+    console.warn(`Skip ${s.pair}: 24h cooldown after recent close`);
+    return;
+  }
+
+  // F: Max 5 new opens in last 24h (whole book)
+  const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { data: recentOpens } = await db
+    .from("trades")
+    .select("id, pair")
+    .gte("opened_at", dayAgo)
+    .limit(20);
+  if (recentOpens && recentOpens.length >= 5) {
+    console.warn(`Skip ${s.pair}: daily frequency cap (5 new trades / 24h)`);
+    return;
+  }
+
+  // F: Max 2 open trades in same correlation group
+  const group = correlationGroup(s.pair);
+  const { data: allOpen } = await db
+    .from("trades")
+    .select("id, pair")
+    .eq("status", "open")
+    .limit(50);
+  if (allOpen) {
+    const sameGroup = allOpen.filter((t) => correlationGroup(t.pair) === group);
+    if (sameGroup.length >= 2) {
+      console.warn(`Skip ${s.pair}: correlation cap (${group} already has ${sameGroup.length} open)`);
+      return;
+    }
+  }
+
+  // B: Only auto-book A+ setups (B-grade stays on developing feed only)
+  const grade = (s as Signal & { setupGrade?: string }).setupGrade ?? "A+";
+  if (grade !== "A+") {
+    console.warn(`Skip book ${s.pair}: setup grade ${grade} (developing only)`);
+    return;
+  }
+
+  // Enrich confluences with machine-readable feature tags for expectancy analysis
+  const featureTags = [
+    `grade:${grade}`,
+    `model:${(s as Signal).entryModel ?? "OB"}`,
+    `style:${(s as Signal).signalStyle ?? "swing"}`,
+    `struct_tf:${(s as Signal).structureTimeframe ?? "4H"}`,
+    `entry_tf:${(s as Signal).entryTimeframe ?? "15M"}`,
+    `rr:${Number(s.riskReward).toFixed(2)}`,
+    `conf:${s.confidence}`,
+  ];
+  const enrichedConfluences = [...(s.confluences ?? []), ...featureTags];
 
   const { data: inserted, error } = await db.from("trades").insert({
     pair: s.pair,
@@ -2599,11 +2877,37 @@ async function saveSignalToBook(s: Signal): Promise<void> {
     confidence: s.confidence,
     structure: s.structure,
     htf_bias: s.htf_bias,
-    confluences: s.confluences,
+    confluences: enrichedConfluences,
     status: "open",
     signal_timestamp: s.timestamp,
     initial_stop_loss: s.stopLoss,
   }).select("id").single();
+
+  // Best-effort feature log for expectancy research (table may not exist yet)
+  if (inserted?.id) {
+    try {
+      await db.from("signal_features").insert({
+        trade_id: inserted.id,
+        pair: s.pair,
+        direction: s.direction,
+        grade,
+        entry_model: (s as Signal).entryModel ?? "OB",
+        signal_style: (s as Signal).signalStyle ?? "swing",
+        structure_tf: (s as Signal).structureTimeframe ?? "4H",
+        entry_tf: (s as Signal).entryTimeframe ?? "15M",
+        confidence: s.confidence,
+        risk_reward: Number(s.riskReward) || 0,
+        htf_bias: s.htf_bias,
+        structure: s.structure,
+        has_sweep: (s.confluences ?? []).some((c) => /liquidity sweep|stop hunt/i.test(c)),
+        session_tag: (s.confluences ?? []).find((c) => /London|NewYork|kill/i.test(c)) ?? null,
+        confluences: s.confluences,
+        confidence_breakdown: (s as Signal).confidenceBreakdown ?? null,
+      });
+    } catch (featErr) {
+      console.warn("signal_features log skipped:", featErr instanceof Error ? featErr.message : featErr);
+    }
+  }
 
   if (error || !inserted) {
     console.error("Could not save trade signal:", error?.message ?? "unknown error");
@@ -2682,12 +2986,13 @@ Deno.serve(async (req) => {
   const hotTwelve = await loadHotTwelvePairs();
   const twelveUsed: string[] = [];
 
-  // Run pairs in parallel — Yahoo broad scan; Twelve Data only for hot gold/SPX/US30/GER40
-  const settled = await Promise.allSettled(
-    PAIRS.map(async ({ pair }) => {
+  // Process pairs in small batches — full parallel (36×3 Yahoo calls) triggers 429.
+  const scanOnePair = async (pair: string) => {
       const entryInterval = entryTimeframeFor(pair);
       const entryRange = entryInterval === "5m" || entryInterval === "15m" ? "1mo" : "3mo";
-      let useTwelve = hotTwelve.has(pair);
+      // Twelve Data only for gold + indices; all FX uses Yahoo
+      let useTwelve =
+        !!TWELVE_DATA_API_KEY && isTwelveEligible(pair);
 
       let [hourly, daily, entryTf] = await Promise.all([
         fetchCandles(pair, "1h", "3mo", useTwelve),
@@ -2769,8 +3074,19 @@ Deno.serve(async (req) => {
       }
 
       return { pair, signals, developing, resolved, dataSource: useTwelve ? "twelve" : "yahoo" };
-    }),
-  );
+  };
+
+  const BATCH = 3;
+  const settled: PromiseSettledResult<Awaited<ReturnType<typeof scanOnePair>>>[] = [];
+  for (let i = 0; i < PAIRS.length; i += BATCH) {
+    const chunk = PAIRS.slice(i, i + BATCH);
+    const part = await Promise.allSettled(chunk.map(({ pair }) => scanOnePair(pair)));
+    settled.push(...part);
+    // Brief pause between batches to stay under Yahoo rate limits
+    if (i + BATCH < PAIRS.length) {
+      await new Promise((r) => setTimeout(r, 700));
+    }
+  }
 
   for (const r of settled) {
     if (r.status === "fulfilled") {

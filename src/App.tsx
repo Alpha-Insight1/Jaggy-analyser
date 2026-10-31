@@ -21,7 +21,7 @@ const SignedInIndex = () => {
   if (loading) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 surface-0 px-4">
-        <BrandLogo size={48} className="shadow-gold" />
+        <BrandLogo size={52} withWordmark />
         <p className="text-sm text-muted-foreground">Loading Jaggy Analyser…</p>
       </div>
     );

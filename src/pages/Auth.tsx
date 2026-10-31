@@ -28,7 +28,7 @@ const Auth = () => {
   if (loading) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 surface-0 px-4">
-        <BrandLogo size={48} className="shadow-gold" />
+        <BrandLogo size={52} withWordmark />
         <p className="text-sm text-muted-foreground">Loading…</p>
       </div>
     );
@@ -64,7 +64,7 @@ const Auth = () => {
       {/* Brand panel */}
       <aside className="relative hidden flex-col justify-between border-r border-border/60 surface-1 p-10 lg:flex">
         <div className="flex items-center gap-3">
-          <BrandLogo size={40} className="shadow-gold" />
+          <BrandLogo size={40} withWordmark />
           <span className="text-lg font-semibold tracking-tight">Jaggy Analyser</span>
         </div>
 
@@ -96,7 +96,7 @@ const Auth = () => {
       <main className="flex items-center justify-center px-4 py-10">
         <div className="w-full max-w-sm">
           <div className="mb-8 flex items-center gap-3">
-            <BrandLogo size={44} className="shadow-gold" />
+            <BrandLogo size={44} withWordmark />
             <div className="leading-tight">
               <p className="text-lg font-semibold tracking-tight">Jaggy Analyser</p>
               <p className="text-[11px] text-muted-foreground">SMC multi-TF desk</p>

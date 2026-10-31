@@ -1,6 +1,8 @@
 # Jaggy Analyser
 
-Swing-trading signal dashboard using Smart Money Concepts (BOS/CHoCH, Order Blocks, FVG) on the 4H chart with Daily bias. Vite + React + TypeScript + shadcn/ui, backed by Supabase (Auth, Postgres, Edge Functions).
+Swing-trading signal dashboard using Smart Money Concepts (BOS/CHoCH, Order Blocks, FVG) on the 4H chart with Daily bias.
+
+Professional refinements: ranked OTE/FVG fills inside OB, impulse-leg discount/premium filter, soft break-even after TP1, A+/B grading with auto-book only for A+, correlation caps, and signal feature logging for expectancy research. Vite + React + TypeScript + shadcn/ui, backed by Supabase (Auth, Postgres, Edge Functions).
 
 ## Local development
 

@@ -46,6 +46,7 @@ export interface Signal {
   signalStyle?: "swing" | "scalp";
   structureTimeframe?: string;
   entryTimeframe?: string;
+  setupGrade?: "A+" | "B";
 }
 
 
@@ -167,19 +168,34 @@ export const SignalCard = ({ signal, index }: { signal: Signal; index: number })
           {signal.direction}
       </div>
 
-      {signal.entryModel && (
-        <div className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-gold/40 bg-gold/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-gold">
-          <Activity className="h-3 w-3" />
-          {signal.entryModel === "OTE" && "OTE · 61.8–79% fib"}
-          {signal.entryModel === "FVG" && "FVG mitigation"}
-          {signal.entryModel === "Breaker" && "Breaker block flip"}
-          {signal.entryModel === "Judas" && "Judas sweep + CHoCH"}
-          {signal.entryModel === "OB" && "Order block · 50% mean threshold"}
-          <span className="text-muted-foreground">
-            · Market on {signal.entryTimeframe ?? "LTF"} confirmation
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        {signal.setupGrade && (
+          <span
+            className={cn(
+              "inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider",
+              signal.setupGrade === "A+"
+                ? "border-bull/40 bg-bull/10 text-bull"
+                : "border-border bg-muted/40 text-muted-foreground",
+            )}
+          >
+            Grade {signal.setupGrade}
+            {signal.setupGrade === "A+" ? " · auto-book" : " · watch"}
           </span>
-        </div>
-      )}
+        )}
+        {signal.entryModel && (
+          <div className="inline-flex items-center gap-1.5 rounded-md border border-gold/40 bg-gold/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-gold">
+            <Activity className="h-3 w-3" />
+            {signal.entryModel === "OTE" && "OTE · 61.8–79% fib"}
+            {signal.entryModel === "FVG" && "FVG mitigation"}
+            {signal.entryModel === "Breaker" && "Breaker block flip"}
+            {signal.entryModel === "Judas" && "Judas sweep + CHoCH"}
+            {signal.entryModel === "OB" && "Order block · 50% mean"}
+            <span className="text-muted-foreground font-medium normal-case tracking-normal">
+              · on {signal.entryTimeframe ?? "LTF"} confirm
+            </span>
+          </div>
+        )}
+      </div>
 
       </div>
 
