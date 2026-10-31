@@ -10,8 +10,8 @@ messaging.onBackgroundMessage((payload) => {
   const data = payload.data || {};
   self.registration.showNotification(notification.title || data.title || "Jaggy Analyser", {
     body: notification.body || data.body || "New trade update",
-    icon: self.registration.scope + "logo.svg",
-    badge: self.registration.scope + "logo.svg",
+    icon: self.registration.scope + "logo-jaggy.png",
+    badge: self.registration.scope + "logo-jaggy.png",
     tag: data.event_id || "jaggy-trade-alert",
     data: { url: data.url && data.url !== "/" ? data.url : self.registration.scope },
   });

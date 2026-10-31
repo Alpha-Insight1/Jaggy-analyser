@@ -92,7 +92,7 @@ export const NotificationToggle = () => {
               new Notification(title, {
                 body,
                 tag: `${isEntry ? "signal" : "closed"}-${t.id}`,
-                icon: `${import.meta.env.BASE_URL}logo.svg`,
+                icon: `${import.meta.env.BASE_URL}logo-jaggy.png`,
                 // Native vibrate when delivered via OS notification center
                 vibrate: isVibrationEnabled() ? [80, 60, 80, 60, 220] : undefined,
               } as NotificationOptions);
