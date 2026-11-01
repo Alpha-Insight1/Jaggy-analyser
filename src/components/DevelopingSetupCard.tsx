@@ -1,5 +1,6 @@
 import { ArrowDown, ArrowUp, Zap, Clock, Activity, Shield, Target } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { TradeActionBanner, approachAlertPrice } from "@/components/TradeActionBanner";
 
 export interface DevelopingSetup {
   pair: string;
@@ -105,6 +106,20 @@ export const DevelopingSetupCard = ({
           {setup.proximity}%
         </span>
       </div>
+
+      <TradeActionBanner
+        mode="alert_only"
+        pair={setup.pair}
+        direction={setup.direction}
+        alertPrice={
+          setup.plan
+            ? approachAlertPrice(setup.direction, setup.plan.entry, setup.currentPrice)
+            : setup.currentPrice
+        }
+        limitPrice={setup.plan?.entry ?? null}
+        stopLoss={setup.plan?.stopLoss ?? null}
+        takeProfit={setup.plan?.takeProfit ?? null}
+      />
 
       {/* Proposed trade zones */}
       {setup.plan && (

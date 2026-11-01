@@ -200,7 +200,7 @@ const Index = () => {
           <SectionHeader
             icon={Activity}
             title="Active signals"
-            subtitle="Grouped by market — only confirmed setups"
+            subtitle="Confirmed setups — follow the action banner on each card"
             right={
               lastUpdated && (
                 <span className="font-mono">Updated {lastUpdated.toLocaleTimeString()}</span>
@@ -273,7 +273,7 @@ const Index = () => {
           <SectionHeader
             icon={Radar}
             title="Developing setups"
-            subtitle="Watchlist by market — not confirmed for entry yet"
+            subtitle="Watchlist only — set alerts, do not enter until confirmed"
             right={
               <>
                 {newsCount > 0 && (

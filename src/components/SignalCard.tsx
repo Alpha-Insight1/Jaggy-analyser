@@ -5,6 +5,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { RiskCalculator } from "./RiskCalculator";
+import { TradeActionBanner, approachAlertPrice, type ActionMode } from "@/components/TradeActionBanner";
 
 export interface ConfidenceFactor {
   label: string;
@@ -198,6 +199,30 @@ export const SignalCard = ({ signal, index }: { signal: Signal; index: number })
       </div>
 
       </div>
+
+      <TradeActionBanner
+        mode={((): ActionMode => {
+          if (signal.autoTrigger || (signal.setupGrade === "A+" && signal.confidence >= 90)) {
+            return "auto_fire";
+          }
+          if (signal.setupGrade === "B") return "watch_only";
+          if (signal.entryTrigger === "LIMIT") return "arm_limit";
+          if (signal.awaitingLtfConfirmation) return "wait_confirm";
+          // Default for active A+ / confirmed signals: wait for entry-TF confirmation
+          if (signal.entryTrigger === "MARKET_ON_CONFIRMATION" || signal.ltfConfirmed === false) {
+            return "wait_confirm";
+          }
+          if (signal.setupGrade === "A+") return "arm_limit";
+          return "wait_confirm";
+        })()}
+        pair={signal.pair}
+        direction={signal.direction}
+        alertPrice={approachAlertPrice(signal.direction, signal.entry, signal.currentPrice)}
+        limitPrice={signal.entry}
+        stopLoss={signal.stopLoss}
+        takeProfit={signal.takeProfit}
+        entryTimeframe={signal.entryTimeframe}
+      />
 
       <div className="mt-4">
         <ConfidenceBar value={signal.confidence} />
