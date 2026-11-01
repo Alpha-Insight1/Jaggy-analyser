@@ -5,7 +5,7 @@
 //   Indices → 5M confirmation (swing)
 //   Gold   → 5M confirmation (swing) + 1H→5M BOS/CHoCH+disp scalp
 // Strategy pack: A sessions · B A+/B grade · C gold pullback · D structure bias · E trail · F corr caps
-// Pro refinements: ranked OTE/FVG inside OB · impulse-leg discount/premium · soft BE after TP1 · feature logging
+// Pro swing model: trade Daily swing only · LTF context · TP1=2R TP2=4R · invalidate broken swings
 // Risk model: ATR(14)-based stop on structure TF, tighter ATR on scalp
 // Persists signals in `trades` and resolves them bar-by-bar
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
@@ -153,9 +153,9 @@ interface Signal {
   direction: "BUY" | "SELL";
   entry: number;
   stopLoss: number;
-  takeProfit: number;        // TP1 — partial close (5R)
-  takeProfit2: number;       // TP2 — runner (15R)
-  riskReward: number;        // Reported RR = TP1 (primary target); TP2 is runner only
+  takeProfit: number;        // TP1 — fixed 2R from swing risk
+  takeProfit2: number;       // TP2 — fixed 4R from swing risk
+  riskReward: number;        // Reported RR = TP1 (2R)
   confidence: number;
   structure: "BOS" | "CHoCH";
   confluences: string[];
@@ -165,18 +165,18 @@ interface Signal {
   currentPrice: number;
   timestamp: string;
   htf_bias: "Bullish" | "Bearish" | "Neutral";
-  // Optional deeper SWING entry tier — fills at the daily HTF S/R level for a
-  // higher-conviction discount/premium entry vs the LTF (proximal-OB) entry.
+  // SWING-FIRST: primary live order is Daily HTF zone. LTF is context only.
+  ltfEntry?: number;
+  ltfStopLoss?: number;
   swingEntry?: number;
   swingStopLoss?: number;
   swingRiskPips?: number;
-  // Split-entry smoothing: when both LTF and swing tiers exist, scale in 50/50
-  // across the two limits. UI shows the blended fill + blended risk so the
-  // trader knows the effective entry if both fill.
+  swingInvalidated?: boolean;
+  swingInvalidReason?: string;
   splitEntry?: {
-    tier1: number;       // LTF proximal entry (50% allocation)
-    tier2: number;       // Deeper swing entry (50% allocation)
-    allocation: number;  // 0.5 = even split
+    tier1: number;
+    tier2: number;
+    allocation: number;
     blendedEntry: number;
     blendedRiskPips: number;
   };
@@ -221,7 +221,7 @@ interface DevelopingSetup {
     entry: number;
     stopLoss: number;
     takeProfit: number;   // TP1 (2R)
-    takeProfit2: number;  // TP2 (8R)
+    takeProfit2: number;  // TP2 (4R)
     riskPips: number;
     // Deeper swing entry (daily HTF zone) — optional. When present, this is
     // the higher-conviction fill at a discount/premium level vs the LTF entry.
@@ -1721,16 +1721,35 @@ async function analyzePairFromCandles(
           }
         }
 
-        plan = {
-          entry: Number(pEntry.toFixed(decimals)),
-          stopLoss: Number(pSL.toFixed(decimals)),
-          takeProfit: Number(tp1.toFixed(decimals)),
-          takeProfit2: Number(tp2.toFixed(decimals)),
-          riskPips: Math.round(riskPips),
-          ...(swingEntry != null
-            ? { swingEntry, swingStopLoss, swingRiskPips }
-            : {}),
-        };
+        // Prefer swing levels as the plan the user should trade (2R / 4R)
+        if (swingEntry != null && swingStopLoss != null && swingRiskPips != null) {
+          const sRisk = Math.abs(swingEntry - swingStopLoss);
+          const sTp1 = dir === "BUY" ? swingEntry + sRisk * 2 : swingEntry - sRisk * 2;
+          const sTp2 = dir === "BUY" ? swingEntry + sRisk * 4 : swingEntry - sRisk * 4;
+          plan = {
+            entry: swingEntry,
+            stopLoss: swingStopLoss,
+            takeProfit: Number(sTp1.toFixed(decimals)),
+            takeProfit2: Number(sTp2.toFixed(decimals)),
+            riskPips: swingRiskPips,
+            swingEntry,
+            swingStopLoss,
+            swingRiskPips,
+            // keep LTF on triggers for context
+          };
+          triggers.push(`LTF context @ ${Number(pEntry.toFixed(decimals))} (not the live order)`);
+          triggers.push(`★ SWING plan @ ${swingEntry} · TP1 2R · TP2 4R`);
+        } else {
+          // No swing zone yet — show LTF as context only, mark incomplete
+          plan = {
+            entry: Number(pEntry.toFixed(decimals)),
+            stopLoss: Number(pSL.toFixed(decimals)),
+            takeProfit: Number((dir === "BUY" ? pEntry + risk * 2 : pEntry - risk * 2).toFixed(decimals)),
+            takeProfit2: Number((dir === "BUY" ? pEntry + risk * 4 : pEntry - risk * 4).toFixed(decimals)),
+            riskPips: Math.round(riskPips),
+          };
+          triggers.push("◌ Swing zone not ready — LTF levels are context only");
+        }
       }
     }
 
@@ -2105,65 +2124,79 @@ async function analyzePairFromCandles(
     stopLoss = direction === "BUY" ? entry - maxRisk : entry + maxRisk;
   }
 
-  const risk = Math.abs(entry - stopLoss);
-  if (risk < minRiskFor(pair, atrVal)) return { signal: null, developing: tagBlocked(buildDeveloping(), "GATE 10d-2") };
+  // ---- SWING-FIRST RISK & TARGETS (pro swing book) ----
+  // LTF entry/stop kept for UI context only. Live order uses Daily swing zone.
+  const ltfEntryPrice = entry;
+  const ltfStopPrice = stopLoss;
+  const ltfRisk = Math.abs(ltfEntryPrice - ltfStopPrice);
+  if (ltfRisk < minRiskFor(pair, atrVal)) {
+    return { signal: null, developing: tagBlocked(buildDeveloping(), "GATE 10d-2") };
+  }
 
-  // ---- TAKE PROFITS: ride from support to the top ----
-  // TP1 = first realistic obstacle (nearest opposing 4H swing OR opposing
-  //   HTF zone, whichever comes first). 1.5R floor, 4R cap → bankable partial.
-  // TP2 = the STRONGEST opposing HTF zone within reach (the "top of the
-  //   move"). 3R floor, 10R cap → captures the full ride when structure allows.
-  const minTP1 = risk * 1.5;
-  // TP1 is the bankable partial; TP2 is a runner. Cap runner tighter on crypto
-  // so BTC/ETH don't show inflated 8–10R "risk_reward" on every setup.
-  const maxTP1 = risk * 3;
-  const minTP2 = risk * 2.5;
-  const maxTP2 = isCrypto(pair) ? risk * 5 : risk * 6;
+  const swingCandidate = strongZone.price;
+  const swingSlBuffer = Math.max(atrVal * 1.15, pip(pair) * 10);
+  let swingEntryPx = swingCandidate;
+  let swingStopPx =
+    direction === "BUY" ? swingCandidate - swingSlBuffer : swingCandidate + swingSlBuffer;
+  let swingRiskPx = Math.abs(swingEntryPx - swingStopPx);
 
-  const opposingType: SRZone["type"] = direction === "BUY" ? "resistance" : "support";
-  // All opposing HTF zones beyond entry, sorted nearest → farthest
-  const opposingZones = htfZones
-    .filter((z) => z.type === opposingType)
-    .filter((z) => direction === "BUY" ? z.price > entry : z.price < entry)
-    .sort((a, b) =>
-      direction === "BUY" ? a.price - b.price : b.price - a.price,
-    );
-
-  const swingTP = nearestOpposingSwing(swings, direction, entry, minTP1);
-  // Nearest opposing HTF zone — first obstacle on the way up
-  const nearestZone = opposingZones[0]?.price ?? null;
-  // Strongest opposing HTF zone within max reach — the "top" target
-  const reachLimit = direction === "BUY" ? entry + maxTP2 : entry - maxTP2;
-  const inReach = opposingZones.filter((z) =>
-    direction === "BUY" ? z.price <= reachLimit : z.price >= reachLimit,
-  );
-  const strongestZone = inReach.length > 0
-    ? inReach.reduce((best, z) => (z.touches > best.touches ? z : best)).price
-    : opposingZones[opposingZones.length - 1]?.price ?? null;
-
-  const clamp = (target: number, lo: number, hi: number) =>
+  // Swing should be at/ deeper than LTF (HTF discount/premium), not a chase above OB
+  const deeperOk =
     direction === "BUY"
-      ? Math.min(Math.max(target, entry + lo), entry + hi)
-      : Math.max(Math.min(target, entry - lo), entry - hi);
+      ? swingEntryPx <= ltfEntryPrice + atrVal * 0.2
+      : swingEntryPx >= ltfEntryPrice - atrVal * 0.2;
+  if (!deeperOk || swingRiskPx <= 0) {
+    return {
+      signal: null,
+      developing: tagBlocked(buildDeveloping(), "SWING_ZONE_MISSING"),
+    };
+  }
 
-  // TP1: first obstacle (whichever is nearer — swing or zone)
-  const tp1Candidates = [swingTP, nearestZone].filter((v): v is number => v != null);
-  const tp1Raw = tp1Candidates.length > 0
-    ? (direction === "BUY" ? Math.min(...tp1Candidates) : Math.max(...tp1Candidates))
-    : null;
-  const takeProfit = tp1Raw != null
-    ? clamp(tp1Raw, minTP1, maxTP1)
-    : direction === "BUY" ? entry + risk * 2 : entry - risk * 2;
+  const maxSwingRisk = atrVal * 3.5;
+  if (swingRiskPx > maxSwingRisk) {
+    swingStopPx = direction === "BUY" ? swingEntryPx - maxSwingRisk : swingEntryPx + maxSwingRisk;
+    swingRiskPx = Math.abs(swingEntryPx - swingStopPx);
+  }
 
-  // TP2 must be beyond TP1; aim for the strongest zone (the top), default 6R
-  const tp1Distance = Math.abs(takeProfit - entry);
-  const minTP2Final = Math.max(minTP2, tp1Distance + risk * 0.5);
-  const takeProfit2 = strongestZone != null
-    ? clamp(strongestZone, minTP2Final, maxTP2)
-    : direction === "BUY" ? entry + risk * (isCrypto(pair) ? 4 : 5) : entry - risk * (isCrypto(pair) ? 4 : 5);
+  // Invalidate if price already closed through swing stop (Daily thesis broken)
+  {
+    const lastClose = ltfTail[ltfTail.length - 1]?.close ?? currentPrice;
+    const throughStop =
+      direction === "BUY" ? lastClose < swingStopPx : lastClose > swingStopPx;
+    if (throughStop) {
+      const dev = buildDeveloping();
+      if (dev) {
+        dev.triggers = [
+          "✗ SWING INVALIDATED — price closed through swing stop (Daily zone broken)",
+          ...(dev.triggers ?? []),
+        ];
+        (dev as DevelopingSetup & { blockedBy?: string }).blockedBy = "SWING_INVALIDATED";
+      }
+      return { signal: null, developing: dev };
+    }
+  }
 
-  const rr1 = Number((Math.abs(takeProfit - entry) / risk).toFixed(2));
-  const rr2 = Number((Math.abs(takeProfit2 - entry) / risk).toFixed(2));
+  // No counter-bias primary swing book — Daily must agree (or Neutral)
+  if (
+    htf_bias !== "Neutral" &&
+    htf_bias !== (direction === "BUY" ? "Bullish" : "Bearish")
+  ) {
+    return {
+      signal: null,
+      developing: tagBlocked(buildDeveloping(), "SWING_COUNTER_BIAS"),
+    };
+  }
+
+  // Promote swing to primary executable levels
+  entry = swingEntryPx;
+  stopLoss = swingStopPx;
+  const risk = swingRiskPx;
+
+  // Fixed pro targets from swing risk
+  const takeProfit = direction === "BUY" ? entry + risk * 2 : entry - risk * 2;
+  const takeProfit2 = direction === "BUY" ? entry + risk * 4 : entry - risk * 4;
+  const rr1 = 2;
+  const rr2 = 4;
 
   // ---------- CONFIDENCE BREAKDOWN ----------
   // Each factor records: label, point value, hit/miss. The UI shows this
@@ -2273,45 +2306,11 @@ async function analyzePairFromCandles(
   if (confidence < 72) return { signal: null, developing: tagBlocked(buildDeveloping(), "GATE 11") };
 
   const decimals = priceDecimals(pair);
-
-  // ---- Deeper SWING entry tier ----
-  // Mirror the developing-setup logic: the daily HTF zone (strongZone) is the
-  // true discount/premium fill. Only attach when it's meaningfully deeper than
-  // the LTF entry (>= 0.5×ATR away in the trade direction).
-  let swingEntry: number | undefined;
-  let swingStopLoss: number | undefined;
-  let swingRiskPips: number | undefined;
-  {
-    const candidate = strongZone.price;
-    const inDirection = direction === "BUY" ? candidate < entry : candidate > entry;
-    const gap = Math.abs(candidate - entry);
-    if (inDirection && gap >= atrVal * 0.5) {
-      const slBuffer = Math.max(atrVal * 1.2, p * 8);
-      const sSL = direction === "BUY" ? candidate - slBuffer : candidate + slBuffer;
-      const sRisk = Math.abs(candidate - sSL);
-      if (sRisk > 0) {
-        swingEntry = Number(candidate.toFixed(decimals));
-        swingStopLoss = Number(sSL.toFixed(decimals));
-        swingRiskPips = Math.round(toPips(pair, sRisk));
-      }
-    }
-  }
-
-  // ---- Split-entry smoothing (50/50 LTF + swing) ----
-  let splitEntry:
-    | { tier1: number; tier2: number; allocation: number; blendedEntry: number; blendedRiskPips: number }
-    | undefined;
-  if (swingEntry != null && swingStopLoss != null) {
-    const blended = (entry + swingEntry) / 2;
-    const blendedRisk = Math.abs(blended - swingStopLoss);
-    splitEntry = {
-      tier1: Number(entry.toFixed(decimals)),
-      tier2: swingEntry,
-      allocation: 0.5,
-      blendedEntry: Number(blended.toFixed(decimals)),
-      blendedRiskPips: Math.round(toPips(pair, blendedRisk)),
-    };
-  }
+  const swingEntry = Number(entry.toFixed(decimals));
+  const swingStopLoss = Number(stopLoss.toFixed(decimals));
+  const swingRiskPips = Math.round(toPips(pair, Math.abs(entry - stopLoss)));
+  const ltfEntry = Number(ltfEntryPrice.toFixed(decimals));
+  const ltfStopLoss = Number(ltfStopPrice.toFixed(decimals));
 
   // ---- Entry-TF trigger (15M forex / 5M indices+gold) ----
   // Market direction (Daily+4H) is confirmed above. Now require the entry TF
@@ -2348,29 +2347,36 @@ async function analyzePairFromCandles(
       stopLoss: Number(stopLoss.toFixed(decimals)),
       takeProfit: Number(takeProfit.toFixed(decimals)),
       takeProfit2: Number(takeProfit2.toFixed(decimals)),
-      riskReward: rr1,  // TP1 R — actual book PnL uses close_price
+      riskReward: 2,
       confidence,
       structure: structure.structure,
-      confluences,
+      confluences: [
+        `★ SWING ENTRY @ ${swingEntry} · SL ${swingStopLoss} · TP1 2R · TP2 4R`,
+        `LTF context only @ ${ltfEntry} (not the live order)`,
+        ...confluences,
+      ],
       confidenceBreakdown: breakdown,
       currentPrice: Number(currentPrice.toFixed(decimals)),
       timestamp: new Date(lastCandle.time * 1000).toISOString(),
       htf_bias,
-      ...(swingEntry != null ? { swingEntry, swingStopLoss, swingRiskPips } : {}),
-      ...(splitEntry ? { splitEntry } : {}),
+      ltfEntry,
+      ltfStopLoss,
+      swingEntry,
+      swingStopLoss,
+      swingRiskPips,
+      swingInvalidated: false,
       ltfConfirmed: confidence >= 90 ? true : ltfConfirmed,
       awaitingLtfConfirmation: confidence >= 90 ? false : !ltfConfirmed,
-      autoTrigger: confidence >= 90,
+      autoTrigger: false,
       entryModel,
-      entryTrigger: "MARKET_ON_CONFIRMATION",
+      entryTrigger: "LIMIT",
       entryZone: {
-        top: Number(entryZone.top.toFixed(decimals)),
-        bottom: Number(entryZone.bottom.toFixed(decimals)),
+        top: Number(Math.max(entryZone.top, swingEntry).toFixed(decimals)),
+        bottom: Number(Math.min(entryZone.bottom, swingEntry).toFixed(decimals)),
       },
-      signalStyle,
+      signalStyle: "swing",
       structureTimeframe: structureTfLabel,
-      entryTimeframe: entryTfName,
-      // B: A+ = HTF aligned + high confidence + session/kill-zone quality
+      entryTimeframe: "D1 swing",
       setupGrade: (marketDirectionAligned && confidence >= 78 && (kz.active || inTradingSession(pair, new Date(lastCandle.time * 1000)).ok))
         ? "A+"
         : "B",

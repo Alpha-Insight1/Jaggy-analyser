@@ -28,9 +28,13 @@ export interface Signal {
   currentPrice: number;
   timestamp: string;
   htf_bias: "Bullish" | "Bearish" | "Neutral";
+  ltfEntry?: number;
+  ltfStopLoss?: number;
   swingEntry?: number;
   swingStopLoss?: number;
   swingRiskPips?: number;
+  swingInvalidated?: boolean;
+  swingInvalidReason?: string;
   splitEntry?: {
     tier1: number;
     tier2: number;
@@ -202,18 +206,15 @@ export const SignalCard = ({ signal, index }: { signal: Signal; index: number })
 
       <TradeActionBanner
         mode={((): ActionMode => {
-          if (signal.autoTrigger || (signal.setupGrade === "A+" && signal.confidence >= 90)) {
-            return "auto_fire";
-          }
+          if (signal.swingInvalidated) return "watch_only";
           if (signal.setupGrade === "B") return "watch_only";
-          if (signal.entryTrigger === "LIMIT") return "arm_limit";
-          if (signal.awaitingLtfConfirmation) return "wait_confirm";
-          // Default for active A+ / confirmed signals: wait for entry-TF confirmation
-          if (signal.entryTrigger === "MARKET_ON_CONFIRMATION" || signal.ltfConfirmed === false) {
+          // Swing book: limit at Daily zone
+          if (signal.entryTrigger === "LIMIT" || signal.signalStyle === "swing") return "arm_limit";
+          if (signal.autoTrigger) return "auto_fire";
+          if (signal.awaitingLtfConfirmation || signal.entryTrigger === "MARKET_ON_CONFIRMATION") {
             return "wait_confirm";
           }
-          if (signal.setupGrade === "A+") return "arm_limit";
-          return "wait_confirm";
+          return "arm_limit";
         })()}
         pair={signal.pair}
         direction={signal.direction}
@@ -223,6 +224,19 @@ export const SignalCard = ({ signal, index }: { signal: Signal; index: number })
         takeProfit={signal.takeProfit}
         entryTimeframe={signal.entryTimeframe}
       />
+
+      {signal.ltfEntry != null && (
+        <div className="mt-2 rounded-md border border-border/50 bg-muted/20 px-2.5 py-1.5 text-[10px] text-muted-foreground">
+          LTF context (not the live order): entry{" "}
+          <span className="font-mono text-foreground/80">{signal.ltfEntry}</span>
+          {signal.ltfStopLoss != null && (
+            <>
+              {" · "}SL <span className="font-mono text-foreground/80">{signal.ltfStopLoss}</span>
+            </>
+          )}
+          {" · "}Trade the <span className="text-primary font-semibold">swing</span> levels above (TP1 2R · TP2 4R)
+        </div>
+      )}
 
       <div className="mt-4">
         <ConfidenceBar value={signal.confidence} />

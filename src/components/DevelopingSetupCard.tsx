@@ -108,7 +108,11 @@ export const DevelopingSetupCard = ({
       </div>
 
       <TradeActionBanner
-        mode="alert_only"
+        mode={
+          setup.triggers.some((x) => /INVALIDATED|invalidated/i.test(x))
+            ? "watch_only"
+            : "alert_only"
+        }
         pair={setup.pair}
         direction={setup.direction}
         alertPrice={
@@ -125,10 +129,10 @@ export const DevelopingSetupCard = ({
       {setup.plan && (
         <div className="mt-3 space-y-2">
           <div className="grid grid-cols-2 gap-2 rounded-lg surface-2 p-2.5">
-            <Zone label="LTF entry" value={String(setup.plan.entry)} icon={Activity} />
+            <Zone label="Swing entry" value={String(setup.plan.entry)} icon={Activity} tone={isBuy ? "bull" : "bear"} />
             <Zone label="Stop" value={String(setup.plan.stopLoss)} icon={Shield} tone="bear" />
-            <Zone label="TP1 (swing)" value={String(setup.plan.takeProfit)} icon={Target} tone="bull" />
-            <Zone label="TP2 (HTF)" value={String(setup.plan.takeProfit2)} icon={Target} tone="bull" />
+            <Zone label="TP1 (2R)" value={String(setup.plan.takeProfit)} icon={Target} tone="bull" />
+            <Zone label="TP2 (4R)" value={String(setup.plan.takeProfit2)} icon={Target} tone="bull" />
           </div>
           {setup.plan.swingEntry != null && (
             <div className="grid grid-cols-2 gap-2 rounded-lg border border-gold/30 bg-gold/5 p-2.5">
