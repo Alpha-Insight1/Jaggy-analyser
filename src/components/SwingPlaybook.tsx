@@ -20,7 +20,7 @@ export function SwingPlaybook({ className }: { className?: string }) {
     {
       icon: Crosshair,
       title: "2 · Arm limit",
-      body: "Active signal = LIMIT in the deep entry zone (after liquidity). Never in the shallow BOS grab zone. LTF is context only.",
+      body: "Active signal = LIMIT at the ranked POI (Order Block or Structural origin). Never in the shallow liquidity grab. LTF is context only.",
       tone: "bull" as const,
     },
     {

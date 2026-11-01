@@ -1,0 +1,263 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Jaggy design system — geometric, high-contrast, matched to the jagged mark.
+   All colors in HSL. */
+
+@layer base {
+  :root {
+    /* Near-black canvas with cool undertone — logo is pure geometry on dark */
+    --background: 230 18% 4%;
+    --foreground: 210 25% 96%;
+
+    --card: 230 16% 7%;
+    --card-foreground: 210 25% 96%;
+
+    --popover: 230 16% 8%;
+    --popover-foreground: 210 25% 96%;
+
+    /* Ice accent — sharp, modern, matches jagged geometry */
+    --primary: 199 95% 55%;
+    --primary-foreground: 230 20% 6%;
+
+    --secondary: 230 14% 11%;
+    --secondary-foreground: 210 20% 92%;
+
+    --muted: 230 12% 12%;
+    --muted-foreground: 215 12% 55%;
+
+    --accent: 230 14% 13%;
+    --accent-foreground: 210 25% 96%;
+
+    --destructive: 0 72% 55%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 230 12% 14%;
+    --input: 230 12% 12%;
+    --ring: 199 95% 55%;
+
+    /* Tighter, more geometric radius */
+    --radius: 0.5rem;
+
+    /* Semantic trading colors — clean, not neon */
+    --bull: 158 64% 42%;
+    --bull-foreground: 0 0% 100%;
+    --bull-glow: 158 70% 48%;
+
+    --bear: 0 70% 54%;
+    --bear-foreground: 0 0% 100%;
+    --bear-glow: 0 75% 58%;
+
+    --neutral: 215 12% 55%;
+
+    /* Ice replaces gold as brand accent */
+    --gold: 199 95% 55%;
+    --gold-glow: 199 100% 65%;
+
+    --surface-1: 230 16% 7%;
+    --surface-2: 230 14% 9%;
+    --surface-3: 230 12% 13%;
+
+    --gradient-bull: linear-gradient(135deg, hsl(158 64% 38%), hsl(168 55% 32%));
+    --gradient-bear: linear-gradient(135deg, hsl(0 70% 48%), hsl(350 60% 42%));
+    --gradient-gold: linear-gradient(135deg, hsl(199 95% 50%), hsl(210 90% 45%));
+    --gradient-surface: linear-gradient(180deg, hsl(230 16% 8%), hsl(230 18% 5%));
+
+    --gradient-ambient:
+      radial-gradient(ellipse 80% 50% at 50% -20%, hsl(199 60% 20% / 0.18), transparent 55%),
+      linear-gradient(180deg, hsl(230 18% 5%) 0%, hsl(230 18% 3.5%) 100%);
+
+    --pattern-grid: none;
+
+    --shadow-card:
+      0 1px 0 0 hsl(0 0% 100% / 0.04) inset,
+      0 0 0 1px hsl(0 0% 0% / 0.4),
+      0 12px 32px -16px hsl(0 0% 0% / 0.85);
+    --shadow-bull: 0 0 20px -8px hsl(var(--bull-glow) / 0.3);
+    --shadow-bear: 0 0 20px -8px hsl(var(--bear-glow) / 0.3);
+    --shadow-gold: 0 0 24px -10px hsl(var(--gold-glow) / 0.35);
+
+    --transition-smooth: all 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+
+    --sidebar-background: 230 16% 6%;
+    --sidebar-foreground: 210 20% 92%;
+    --sidebar-primary: 199 95% 55%;
+    --sidebar-primary-foreground: 230 20% 6%;
+    --sidebar-accent: 230 14% 12%;
+    --sidebar-accent-foreground: 210 20% 92%;
+    --sidebar-border: 230 12% 14%;
+    --sidebar-ring: 199 95% 55%;
+  }
+
+  .light {
+    --background: 210 20% 98%;
+    --foreground: 230 20% 8%;
+    --card: 0 0% 100%;
+    --card-foreground: 230 20% 8%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 230 20% 8%;
+    --primary: 199 90% 42%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 16% 94%;
+    --secondary-foreground: 230 20% 12%;
+    --muted: 210 16% 94%;
+    --muted-foreground: 215 12% 42%;
+    --accent: 210 16% 94%;
+    --accent-foreground: 230 20% 12%;
+    --destructive: 0 72% 50%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 214 16% 88%;
+    --input: 214 16% 88%;
+    --ring: 199 90% 42%;
+    --bull: 158 64% 36%;
+    --bear: 0 70% 48%;
+    --gold: 199 90% 42%;
+    --gold-glow: 199 90% 50%;
+    --surface-1: 0 0% 100%;
+    --surface-2: 210 20% 97%;
+    --surface-3: 210 16% 94%;
+    --gradient-ambient: linear-gradient(180deg, hsl(210 20% 98%) 0%, hsl(210 18% 96%) 100%);
+    --shadow-card:
+      0 1px 0 0 hsl(0 0% 100% / 0.8) inset,
+      0 0 0 1px hsl(230 16% 88%),
+      0 8px 24px -12px hsl(230 20% 40% / 0.12);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    @apply antialiased;
+    font-feature-settings: "ss01" on, "cv01" on;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    background-image: var(--gradient-ambient);
+    background-attachment: fixed;
+    min-height: 100dvh;
+  }
+
+  /* Sharper selection */
+  ::selection {
+    background: hsl(var(--primary) / 0.25);
+    color: hsl(var(--foreground));
+  }
+}
+
+@layer utilities {
+  .surface-0 {
+    background-color: hsl(var(--background));
+  }
+  .surface-1 {
+    background-color: hsl(var(--surface-1));
+  }
+  .surface-2 {
+    background-color: hsl(var(--surface-2));
+  }
+  .surface-3 {
+    background-color: hsl(var(--surface-3));
+  }
+
+  .text-bull {
+    color: hsl(var(--bull));
+  }
+  .text-bear {
+    color: hsl(var(--bear));
+  }
+  .text-gold {
+    color: hsl(var(--gold));
+  }
+  .bg-bull {
+    background-color: hsl(var(--bull));
+  }
+  .bg-bear {
+    background-color: hsl(var(--bear));
+  }
+  .bg-gold {
+    background-color: hsl(var(--gold));
+  }
+  .border-bull {
+    border-color: hsl(var(--bull));
+  }
+  .border-bear {
+    border-color: hsl(var(--bear));
+  }
+  .border-gold {
+    border-color: hsl(var(--gold));
+  }
+
+  .gradient-bull {
+    background-image: var(--gradient-bull);
+  }
+  .gradient-bear {
+    background-image: var(--gradient-bear);
+  }
+  .gradient-gold {
+    background-image: var(--gradient-gold);
+  }
+
+  .shadow-card,
+  .shadow-card-elev {
+    box-shadow: var(--shadow-card);
+  }
+  .shadow-bull {
+    box-shadow: var(--shadow-bull);
+  }
+  .shadow-bear {
+    box-shadow: var(--shadow-bear);
+  }
+  .shadow-gold {
+    box-shadow: var(--shadow-gold);
+  }
+
+  .transition-smooth {
+    transition: var(--transition-smooth);
+  }
+
+  /* Geometric card with left direction rail */
+  .card-rail-bull {
+    box-shadow: inset 3px 0 0 0 hsl(var(--bull));
+  }
+  .card-rail-bear {
+    box-shadow: inset 3px 0 0 0 hsl(var(--bear));
+  }
+
+  .pulse-dot {
+    animation: pulse-dot 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.55; transform: scale(0.85); }
+  }
+
+  .pt-safe {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+}
+
+
+@layer utilities {
+  .fade-in-up {
+    animation: fade-in-up 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

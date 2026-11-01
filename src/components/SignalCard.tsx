@@ -45,6 +45,10 @@ export interface Signal {
   ltfConfirmed?: boolean;
   awaitingLtfConfirmation?: boolean;
   autoTrigger?: boolean;
+  poiType?: "order_block" | "structural_origin";
+  poiLabel?: string;
+  poiScore?: number;
+  poiZone?: { top: number; bottom: number };
   entryModel?: "OTE" | "FVG" | "Breaker" | "Judas" | "OB";
   entryTrigger?: "MARKET_ON_CONFIRMATION" | "LIMIT";
   entryZone?: { top: number; bottom: number };
@@ -140,6 +144,15 @@ export const SignalCard = ({ signal, index }: { signal: Signal; index: number })
             <Badge className="h-5 border-primary/40 bg-primary/15 text-[10px] font-bold uppercase text-primary">
               Swing only
             </Badge>
+            {signal.poiLabel && (
+              <Badge
+                variant="outline"
+                className="h-5 border-border/70 bg-secondary text-[10px] font-medium"
+              >
+                POI · {signal.poiType === "structural_origin" ? "Structural" : "Order block"}
+                {signal.poiScore != null ? ` · ${signal.poiScore}` : ""}
+              </Badge>
+            )}
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">
             HTF bias: <span className="text-foreground/80">{signal.htf_bias}</span>
@@ -225,7 +238,7 @@ export const SignalCard = ({ signal, index }: { signal: Signal; index: number })
               {" · "}SL <span className="font-mono text-foreground/80">{signal.ltfStopLoss}</span>
             </>
           )}
-          {" · "}Trade the <span className="text-primary font-semibold">swing</span> levels above (TP1 2R · TP2 4R)
+          {" · "}Arm limit at ranked <span className="text-primary font-semibold">POI</span> only (TP1 2R · TP2 4R)
         </div>
       )}
 

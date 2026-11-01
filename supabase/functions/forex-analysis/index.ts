@@ -196,6 +196,11 @@ interface Signal {
   entryModel?: "OTE" | "FVG" | "Breaker" | "Judas" | "OB";
   entryTrigger?: "MARKET_ON_CONFIRMATION" | "LIMIT";
   entryZone?: { top: number; bottom: number };
+  /** Thissdax POI ranking — only two types */
+  poiType?: "order_block" | "structural_origin";
+  poiLabel?: string;
+  poiScore?: number;
+  poiZone?: { top: number; bottom: number };
   // Multi-TF labels
   signalStyle?: "swing" | "scalp";
   structureTimeframe?: string;  // e.g. "4H" or "1H"
@@ -1216,11 +1221,96 @@ function buildThissdaxSwing(
   }
 }
 
+
 function priceInZone(price: number, top: number, bottom: number): boolean {
   const hi = Math.max(top, bottom);
   const lo = Math.min(top, bottom);
   return price <= hi && price >= lo;
 }
+
+/** Thissdax: only two POI types — Order Block vs Structural origin. Rank & pick one. */
+interface RankedPoi {
+  type: "order_block" | "structural_origin";
+  label: string;
+  score: number;
+  price: number;
+  zoneTop: number;
+  zoneBottom: number;
+  fresh: boolean;
+}
+
+function rankThissdaxPois(
+  direction: "BUY" | "SELL",
+  td: ThissdaxSwing,
+  ob: { top: number; bottom: number; index?: number } | null,
+  strongZonePrice: number,
+  candles: Candle[],
+  atrVal: number,
+): RankedPoi | null {
+  const candidates: RankedPoi[] = [];
+  const inDeep = (px: number) => priceInZone(px, td.entryTop, td.entryBottom);
+  const inValue = (px: number) =>
+    direction === "BUY" ? px <= td.equilibrium : px >= td.equilibrium;
+  const notInLiq = (px: number) => !priceInZone(px, td.liqTop, td.liqBottom);
+
+  // --- Type A: Order Block POI (last opposing candle before BOS impulse) ---
+  if (ob) {
+    const mid = (ob.top + ob.bottom) / 2;
+    let score = 40;
+    const fresh = ob.index != null ? isFreshOB(candles, ob as OrderBlock) : false;
+    if (fresh) score += 18;
+    if (inDeep(mid)) score += 22;
+    else if (priceInZone(mid, td.origin, td.extreme)) score += 8;
+    if (inValue(mid)) score += 12;
+    if (notInLiq(mid)) score += 10;
+    else score -= 25; // shallow liquidity grab — heavily penalize
+    if (td.liquidityClass === "structural") score += 6;
+    candidates.push({
+      type: "order_block",
+      label: fresh ? "Order Block (fresh)" : "Order Block",
+      score,
+      price: mid,
+      zoneTop: ob.top,
+      zoneBottom: ob.bottom,
+      fresh,
+    });
+  }
+
+  // --- Type B: Structural origin POI (protected HL/LH / structural liquidity) ---
+  {
+    const originPx = td.structuralLiquidity ?? td.origin;
+    let score = 45; // structural is Thissdax's preferred continuation POI
+    if (td.structuralLiquidity != null) score += 10;
+    if (inDeep(originPx)) score += 20;
+    if (inValue(originPx)) score += 12;
+    if (notInLiq(originPx)) score += 10;
+    else score -= 20;
+    if (td.liquidityClass === "structural") score += 12;
+    if (td.liquidityClass === "inducement") score -= 8;
+    // Daily strong zone confluence
+    if (Math.abs(originPx - strongZonePrice) <= atrVal * 0.6) score += 10;
+    candidates.push({
+      type: "structural_origin",
+      label: td.structuralLiquidity != null
+        ? "Structural origin (liquidity)"
+        : "Structural origin (protected swing)",
+      score,
+      price: originPx,
+      zoneTop: direction === "BUY" ? originPx + atrVal * 0.25 : originPx,
+      zoneBottom: direction === "BUY" ? originPx : originPx - atrVal * 0.25,
+      fresh: true,
+    });
+  }
+
+  // Prefer OB when it sits cleanly in deep zone AND is fresh with high score
+  candidates.sort((a, b) => b.score - a.score);
+  const best = candidates[0];
+  if (!best || best.score < 50) return null;
+  // Final: must not arm inside liquidity zone
+  if (!notInLiq(best.price) && !inDeep(best.price)) return null;
+  return best;
+}
+
 
 
 // ---- Price sanity (prevents GER40@80k-style glitches) ----
@@ -2381,29 +2471,31 @@ async function analyzePairFromCandles(
     return { signal: null, developing: tagBlocked(buildDeveloping(), "GATE 10d-2") };
   }
 
-  // Thissdax entry: prefer deeper entry zone mid (after liquidity), else Daily strong zone
-  const tdEntryMid = (tdSwing.entryTop + tdSwing.entryBottom) / 2;
-  const structuralPx = tdSwing.structuralLiquidity;
-  let swingCandidate = tdEntryMid;
-  // Bias toward Daily strong zone when it sits inside the Thissdax entry zone
-  if (
-    priceInZone(strongZone.price, tdSwing.entryTop, tdSwing.entryBottom) ||
-    priceInZone(strongZone.price, tdSwing.origin, tdSwing.extreme)
-  ) {
-    swingCandidate = strongZone.price;
+  // Thissdax POI ranking — arm limit ONLY at ranked POI (OB or structural origin)
+  const rankedPoi = rankThissdaxPois(
+    direction,
+    tdSwing,
+    ob,
+    strongZone.price,
+    ltfTail,
+    atrVal,
+  );
+  if (!rankedPoi) {
+    return {
+      signal: null,
+      developing: tagBlocked(buildDeveloping(), "POI_NONE (no valid OB or structural POI)"),
+    };
   }
-  // Structural liquidity level is ideal continuation POI when available and in value area
-  if (
-    structuralPx != null &&
-    (direction === "BUY"
-      ? structuralPx <= tdSwing.equilibrium && structuralPx >= tdSwing.origin - atrVal * 0.5
-      : structuralPx >= tdSwing.equilibrium && structuralPx <= tdSwing.origin + atrVal * 0.5)
-  ) {
-    swingCandidate = structuralPx;
+
+  const tdEntryMid = (tdSwing.entryTop + tdSwing.entryBottom) / 2;
+  let swingCandidate = rankedPoi.price;
+  // Keep POI inside deep zone when possible
+  if (priceInZone(swingCandidate, tdSwing.liqTop, tdSwing.liqBottom)) {
+    swingCandidate = tdEntryMid;
   }
 
   const swingSlBuffer = Math.max(atrVal * 1.15, pip(pair) * 10);
-  // Stop beyond swing origin (protected HL/LH) — Thissdax "protected low/high"
+  // Stop beyond protected origin (Thissdax protected low/high)
   let swingEntryPx = swingCandidate;
   let swingStopPx =
     direction === "BUY"
@@ -2411,9 +2503,7 @@ async function analyzePairFromCandles(
       : Math.max(tdSwing.origin, swingCandidate) + swingSlBuffer;
   let swingRiskPx = Math.abs(swingEntryPx - swingStopPx);
 
-  // Must not place live entry inside the liquidity (shallow) zone
   if (priceInZone(swingEntryPx, tdSwing.liqTop, tdSwing.liqBottom)) {
-    // Push to entry zone mid
     swingEntryPx = tdEntryMid;
     swingStopPx =
       direction === "BUY"
@@ -2633,6 +2723,7 @@ async function analyzePairFromCandles(
       structure: structure.structure,
       confluences: [
         `★ SWING ENTRY @ ${swingEntry} · SL ${swingStopLoss} · TP1 2R · TP2 4R`,
+        `POI: ${rankedPoi.label} (score ${rankedPoi.score}) · arm limit here only`,
         `Thissdax: sweep+BOS · Fib ${direction === "BUY" ? "discount" : "premium"} · ${tdSwing.liquidityClass} liquidity`,
         `Avoid liquidity zone ${Number(Math.min(tdSwing.liqBottom, tdSwing.liqTop).toFixed(decimals))}–${Number(Math.max(tdSwing.liqBottom, tdSwing.liqTop).toFixed(decimals))} · enter deeper`,
         `LTF context only @ ${ltfEntry} (not the live order)`,
@@ -2651,11 +2742,18 @@ async function analyzePairFromCandles(
       ltfConfirmed: confidence >= 90 ? true : ltfConfirmed,
       awaitingLtfConfirmation: confidence >= 90 ? false : !ltfConfirmed,
       autoTrigger: false,
-      entryModel,
+      entryModel: rankedPoi.type === "order_block" ? "OB" : entryModel,
       entryTrigger: "LIMIT",
       entryZone: {
-        top: Number(Math.max(entryZone.top, swingEntry).toFixed(decimals)),
-        bottom: Number(Math.min(entryZone.bottom, swingEntry).toFixed(decimals)),
+        top: Number(rankedPoi.zoneTop.toFixed(decimals)),
+        bottom: Number(rankedPoi.zoneBottom.toFixed(decimals)),
+      },
+      poiType: rankedPoi.type,
+      poiLabel: rankedPoi.label,
+      poiScore: rankedPoi.score,
+      poiZone: {
+        top: Number(rankedPoi.zoneTop.toFixed(decimals)),
+        bottom: Number(rankedPoi.zoneBottom.toFixed(decimals)),
       },
       signalStyle: "swing",
       structureTimeframe: structureTfLabel,
