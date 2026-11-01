@@ -977,12 +977,12 @@ function priceBand(pair: string): { min: number; max: number } | null {
     if (pair.startsWith("ETH")) return { min: 50, max: 50000 };
     return { min: 0.01, max: 500000 };
   }
-  if (pair === "GER40") return { min: 5000, max: 30000 };
-  if (pair === "US30") return { min: 15000, max: 60000 };
-  if (pair === "NAS100") return { min: 5000, max: 40000 };
-  if (pair === "SPX500") return { min: 1500, max: 10000 };
-  if (pair === "UK100") return { min: 4000, max: 15000 };
-  if (pair === "JPN225") return { min: 10000, max: 60000 };
+  if (pair === "GER40") return { min: 5000, max: 50000 };
+  if (pair === "US30") return { min: 15000, max: 100000 };
+  if (pair === "NAS100") return { min: 5000, max: 80000 };
+  if (pair === "SPX500") return { min: 1500, max: 20000 };
+  if (pair === "UK100") return { min: 4000, max: 25000 };
+  if (pair === "JPN225") return { min: 10000, max: 120000 }; // Nikkei traded ~63k+ in 2026
   // FX majors / crosses
   if (pair.includes("JPY")) return { min: 50, max: 300 };
   if (pair.includes("/")) return { min: 0.2, max: 5 };
@@ -1234,7 +1234,13 @@ async function fetchYahooCandles(
   }
   const cleaned = filterPlausibleCandles(pair, raw);
   if (cleaned.length < 10) {
-    throw new Error(`Yahoo prices out of band for ${pair} (bad symbol/data)`);
+    const sample = raw.slice(-3).map((c) => c.close);
+    const band = priceBand(pair);
+    throw new Error(
+      `Yahoo prices out of band for ${pair} (bad symbol/data)` +
+        (sample.length ? `; last closes=${sample.join(",")}` : "") +
+        (band ? `; allowed ${band.min}-${band.max}` : ""),
+    );
   }
   return interval === "4h" ? resampleTo4H(cleaned) : cleaned;
   }
