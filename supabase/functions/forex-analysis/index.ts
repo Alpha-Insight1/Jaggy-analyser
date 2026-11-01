@@ -5,7 +5,7 @@
 //   Indices → 5M confirmation (swing)
 //   Gold   → 5M confirmation (swing) + 1H→5M BOS/CHoCH+disp scalp
 // Strategy pack: A sessions · B A+/B grade · C gold pullback · D structure bias · E trail · F corr caps
-// Pro swing model: trade Daily swing only · LTF context · TP1=2R TP2=4R · invalidate broken swings
+// Thissdax model: sweep+BOS swing · Fib premium/discount · avoid BOS-liquidity zone · TP1=2R TP2=4R
 // Risk model: ATR(14)-based stop on structure TF, tighter ATR on scalp
 // Persists signals in `trades` and resolves them bar-by-bar
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
@@ -967,6 +967,260 @@ function findLiquiditySweep(
 
 
 // SWING TRADING: 4H structure (resampled from 1h) + Daily HTF bias
+
+
+
+// ============================================================================
+// THISSDAX MODEL — Market structure (algo) + Liquidity
+// ----------------------------------------------------------------------------
+// 1) Valid swing = sweep of prior swing + BOS in trade direction
+// 2) Fib on full swing (HL→HH or LH→LL): below mid = discount (buys only),
+//    above mid = premium (sells only)
+// 3) Fib from BOS → swing origin: shallow side = liquidity (do NOT enter);
+//    deeper side = POI / entry zone
+// 4) Structural liquidity (last low before main low / last high before main high)
+//    is preferred for continuation
+// ============================================================================
+
+interface ThissdaxSwing {
+  direction: "BUY" | "SELL";
+  origin: number;       // protected HL (buy) or LH (sell)
+  extreme: number;      // HH (buy) or LL (sell)
+  bosLevel: number;
+  bosIndex: number;
+  equilibrium: number;  // 50% of origin→extreme
+  /** True when current price is in discount (buys) or premium (sells) */
+  inValueArea: boolean;
+  /** Shallow pullback from BOS — liquidity / no-entry */
+  liqTop: number;
+  liqBottom: number;
+  /** Deeper zone after liquidity — preferred entry */
+  entryTop: number;
+  entryBottom: number;
+  /** Structural liquidity reference (last swing before main origin) */
+  structuralLiquidity: number | null;
+  liquidityClass: "structural" | "inducement" | "transactional";
+}
+
+/**
+ * Build a Thissdax-validated swing on the structure TF.
+ * Requires: prior swing sweep + BOS, then maps Fib discount/premium + liquidity zone.
+ */
+function buildThissdaxSwing(
+  candles: Candle[],
+  swings: Swing[],
+  direction: "BUY" | "SELL",
+  currentPrice: number,
+): ThissdaxSwing | null {
+  if (candles.length < 20 || swings.length < 4) return null;
+
+  const highs = swings.filter((s) => s.type === "high");
+  const lows = swings.filter((s) => s.type === "low");
+  if (highs.length < 2 || lows.length < 2) return null;
+
+  if (direction === "BUY") {
+    // Need a BOS up: close above a prior swing high after a low was swept
+    const recentHighs = highs.slice(-4);
+    const recentLows = lows.slice(-5);
+    let bosLevel: number | null = null;
+    let bosIndex: number | null = null;
+    let origin: number | null = null;
+    let originIdx = -1;
+
+    for (let hi = recentHighs.length - 1; hi >= 1; hi--) {
+      const level = recentHighs[hi - 1].price;
+      const after = recentHighs[hi - 1].index;
+      for (let j = after + 1; j < candles.length; j++) {
+        if (candles[j].close > level) {
+          // Find the low before this BOS (protected HL)
+          const priorLows = recentLows.filter((l) => l.index < j);
+          if (!priorLows.length) break;
+          const hl = priorLows[priorLows.length - 1];
+          // Sweep check: some low before HL was taken (wick or close below a prior low)
+          const older = priorLows.slice(0, -1);
+          let swept = older.length === 0;
+          for (const ol of older) {
+            for (let k = ol.index + 1; k <= hl.index; k++) {
+              if (candles[k].low < ol.price) {
+                swept = true;
+                break;
+              }
+            }
+            if (swept) break;
+          }
+          // Also accept equal-low / slight undercut of hl itself as transactional liquidity
+          if (!swept) {
+            for (let k = Math.max(0, hl.index - 8); k < hl.index; k++) {
+              if (candles[k].low <= hl.price * 1.0001 && candles[k].low >= hl.price * 0.998) {
+                swept = true;
+                break;
+              }
+            }
+          }
+          if (!swept) break;
+
+          bosLevel = level;
+          bosIndex = j;
+          origin = hl.price;
+          originIdx = hl.index;
+          break;
+        }
+      }
+      if (bosLevel != null) break;
+    }
+    if (bosLevel == null || origin == null || bosIndex == null) return null;
+
+    // Extreme = highest high after BOS (or the BOS candle high)
+    let extreme = bosLevel;
+    for (let j = bosIndex; j < candles.length; j++) {
+      if (candles[j].high > extreme) extreme = candles[j].high;
+    }
+    if (extreme <= origin) return null;
+
+    const equilibrium = origin + (extreme - origin) * 0.5;
+    const inValueArea = currentPrice <= equilibrium; // discount for buys
+
+    // Liquidity zone: from BOS level toward origin — shallow 0–50% of BOS→origin leg
+    // Entry zone: deeper 50–100% of that leg (toward origin / structural POI)
+    const leg = bosLevel - origin;
+    const midLeg = origin + leg * 0.5;
+    const liqTop = bosLevel;
+    const liqBottom = midLeg;
+    const entryTop = midLeg;
+    const entryBottom = origin;
+
+    // Structural liquidity: last low before the main origin low
+    const olderLows = lows.filter((l) => l.index < originIdx);
+    const structuralLiquidity = olderLows.length
+      ? olderLows[olderLows.length - 1].price
+      : null;
+
+    // Classify: if we swept a clear prior low → structural; equal lows → transactional; else inducement
+    let liquidityClass: ThissdaxSwing["liquidityClass"] = "structural";
+    if (structuralLiquidity != null) {
+      const dist = Math.abs(origin - structuralLiquidity) / Math.max(extreme - origin, 1e-9);
+      if (dist < 0.08) liquidityClass = "transactional";
+      else if (dist > 0.35) liquidityClass = "inducement";
+      else liquidityClass = "structural";
+    }
+
+    return {
+      direction,
+      origin,
+      extreme,
+      bosLevel,
+      bosIndex,
+      equilibrium,
+      inValueArea,
+      liqTop,
+      liqBottom,
+      entryTop,
+      entryBottom,
+      structuralLiquidity,
+      liquidityClass,
+    };
+  }
+
+  // SELL — mirror
+  {
+    const recentHighs = highs.slice(-5);
+    const recentLows = lows.slice(-4);
+    let bosLevel: number | null = null;
+    let bosIndex: number | null = null;
+    let origin: number | null = null;
+    let originIdx = -1;
+
+    for (let li = recentLows.length - 1; li >= 1; li--) {
+      const level = recentLows[li - 1].price;
+      const after = recentLows[li - 1].index;
+      for (let j = after + 1; j < candles.length; j++) {
+        if (candles[j].close < level) {
+          const priorHighs = recentHighs.filter((h) => h.index < j);
+          if (!priorHighs.length) break;
+          const lh = priorHighs[priorHighs.length - 1];
+          const older = priorHighs.slice(0, -1);
+          let swept = older.length === 0;
+          for (const oh of older) {
+            for (let k = oh.index + 1; k <= lh.index; k++) {
+              if (candles[k].high > oh.price) {
+                swept = true;
+                break;
+              }
+            }
+            if (swept) break;
+          }
+          if (!swept) {
+            for (let k = Math.max(0, lh.index - 8); k < lh.index; k++) {
+              if (candles[k].high >= lh.price * 0.9999 && candles[k].high <= lh.price * 1.002) {
+                swept = true;
+                break;
+              }
+            }
+          }
+          if (!swept) break;
+          bosLevel = level;
+          bosIndex = j;
+          origin = lh.price;
+          originIdx = lh.index;
+          break;
+        }
+      }
+      if (bosLevel != null) break;
+    }
+    if (bosLevel == null || origin == null || bosIndex == null) return null;
+
+    let extreme = bosLevel;
+    for (let j = bosIndex; j < candles.length; j++) {
+      if (candles[j].low < extreme) extreme = candles[j].low;
+    }
+    if (extreme >= origin) return null;
+
+    const equilibrium = extreme + (origin - extreme) * 0.5;
+    const inValueArea = currentPrice >= equilibrium; // premium for sells
+
+    const leg = origin - bosLevel;
+    const midLeg = bosLevel + leg * 0.5;
+    const liqBottom = bosLevel;
+    const liqTop = midLeg;
+    const entryBottom = midLeg;
+    const entryTop = origin;
+
+    const olderHighs = highs.filter((h) => h.index < originIdx);
+    const structuralLiquidity = olderHighs.length
+      ? olderHighs[olderHighs.length - 1].price
+      : null;
+
+    let liquidityClass: ThissdaxSwing["liquidityClass"] = "structural";
+    if (structuralLiquidity != null) {
+      const dist = Math.abs(origin - structuralLiquidity) / Math.max(origin - extreme, 1e-9);
+      if (dist < 0.08) liquidityClass = "transactional";
+      else if (dist > 0.35) liquidityClass = "inducement";
+      else liquidityClass = "structural";
+    }
+
+    return {
+      direction,
+      origin,
+      extreme,
+      bosLevel,
+      bosIndex,
+      equilibrium,
+      inValueArea,
+      liqTop,
+      liqBottom,
+      entryTop,
+      entryBottom,
+      structuralLiquidity,
+      liquidityClass,
+    };
+  }
+}
+
+function priceInZone(price: number, top: number, bottom: number): boolean {
+  const hi = Math.max(top, bottom);
+  const lo = Math.min(top, bottom);
+  return price <= hi && price >= lo;
+}
 
 
 // ---- Price sanity (prevents GER40@80k-style glitches) ----
@@ -2026,46 +2280,40 @@ async function analyzePairFromCandles(
     };
   }
 
-  // GATE 10d: DISCOUNT/PREMIUM relative to the impulse that formed the OB
-  // (or the most recent Daily range). Never use a generic 60-bar window —
-  // that still lets mid-range entries on choppy days.
-  let rangeHigh: number;
-  let rangeLow: number;
-  // Prefer the swing high/low that brackets the OB index (true impulse leg)
-  const obSwingHighs = swings.filter((s) => s.type === "high" && s.index <= ob.index + 2);
-  const obSwingLows = swings.filter((s) => s.type === "low" && s.index <= ob.index + 2);
-  if (direction === "BUY" && obSwingLows.length && obSwingHighs.length) {
-    const legLow = obSwingLows.reduce((a, b) => (a.price < b.price ? a : b));
-    const legHigh = obSwingHighs.filter((s) => s.index >= legLow.index).reduce(
-      (a, b) => (a.price > b.price ? a : b),
-      obSwingHighs[obSwingHighs.length - 1],
-    );
-    rangeLow = legLow.price;
-    rangeHigh = legHigh.price;
-  } else if (direction === "SELL" && obSwingHighs.length && obSwingLows.length) {
-    const legHigh = obSwingHighs.reduce((a, b) => (a.price > b.price ? a : b));
-    const legLow = obSwingLows.filter((s) => s.index >= legHigh.index).reduce(
-      (a, b) => (a.price < b.price ? a : b),
-      obSwingLows[obSwingLows.length - 1],
-    );
-    rangeHigh = legHigh.price;
-    rangeLow = legLow.price;
-  } else if (htfTail.length >= 10) {
-    // Fallback: most recent Daily dealing range
-    const dTail = htfTail.slice(-20);
-    rangeHigh = Math.max(...dTail.map((c) => c.high));
-    rangeLow = Math.min(...dTail.map((c) => c.low));
-  } else {
-    const rangeWindow = ltfTail.slice(-60);
-    rangeHigh = Math.max(...rangeWindow.map((c) => c.high));
-    rangeLow = Math.min(...rangeWindow.map((c) => c.low));
+  // GATE 10d: THISSDAX Fib premium/discount + liquidity no-entry zone
+  // Build validated swing (sweep + BOS) on structure TF, map Fib equilibrium
+  // and the BOS→origin liquidity band (shallow = avoid, deep = enter).
+  const tdSwing = buildThissdaxSwing(ltfTail, swings, direction, currentPrice);
+  if (!tdSwing) {
+    return {
+      signal: null,
+      developing: tagBlocked(buildDeveloping(), "GATE 10d (no valid sweep+BOS swing)"),
+    };
   }
-  const rangeMid = (rangeHigh + rangeLow) / 2;
-  const rangeSize = Math.max(rangeHigh - rangeLow, 1e-9);
-  const offMid = direction === "BUY" ? (entry - rangeMid) / rangeSize : (rangeMid - entry) / rangeSize;
-  // Deep in the wrong half is a hard reject; marginally past parity is penalised.
-  if (offMid > 0.12) return { signal: null, developing: tagBlocked(buildDeveloping(), "GATE 10d") };
-  if (offMid > 0) qualityPenalty += 8;
+  if (!tdSwing.inValueArea) {
+    return {
+      signal: null,
+      developing: tagBlocked(
+        buildDeveloping(),
+        direction === "BUY"
+          ? "GATE 10d (price in premium — wait for discount)"
+          : "GATE 10d (price in discount — wait for premium)",
+      ),
+    };
+  }
+  // Hard reject if entry is still in the shallow liquidity grab zone
+  const entryInLiq = priceInZone(entry, tdSwing.liqTop, tdSwing.liqBottom);
+  if (entryInLiq) {
+    qualityPenalty += 12;
+    // Prefer deeper POI: snap informational entry toward entry zone mid
+    const deeperMid = (tdSwing.entryTop + tdSwing.entryBottom) / 2;
+    if (direction === "BUY" ? deeperMid < entry : deeperMid > entry) {
+      // keep original for context; swing path will use Daily/structural levels
+    }
+  }
+  // Prefer structural liquidity class for continuation book
+  if (tdSwing.liquidityClass === "inducement") qualityPenalty += 6;
+  if (tdSwing.liquidityClass === "transactional") qualityPenalty += 3;
 
   // GATE 10d-2: 1H CONFIRMATION CANDLE — the pro-entry trigger.
   // We no longer fire on a passive limit; require a closed 1H bar inside the
@@ -2133,18 +2381,51 @@ async function analyzePairFromCandles(
     return { signal: null, developing: tagBlocked(buildDeveloping(), "GATE 10d-2") };
   }
 
-  const swingCandidate = strongZone.price;
+  // Thissdax entry: prefer deeper entry zone mid (after liquidity), else Daily strong zone
+  const tdEntryMid = (tdSwing.entryTop + tdSwing.entryBottom) / 2;
+  const structuralPx = tdSwing.structuralLiquidity;
+  let swingCandidate = tdEntryMid;
+  // Bias toward Daily strong zone when it sits inside the Thissdax entry zone
+  if (
+    priceInZone(strongZone.price, tdSwing.entryTop, tdSwing.entryBottom) ||
+    priceInZone(strongZone.price, tdSwing.origin, tdSwing.extreme)
+  ) {
+    swingCandidate = strongZone.price;
+  }
+  // Structural liquidity level is ideal continuation POI when available and in value area
+  if (
+    structuralPx != null &&
+    (direction === "BUY"
+      ? structuralPx <= tdSwing.equilibrium && structuralPx >= tdSwing.origin - atrVal * 0.5
+      : structuralPx >= tdSwing.equilibrium && structuralPx <= tdSwing.origin + atrVal * 0.5)
+  ) {
+    swingCandidate = structuralPx;
+  }
+
   const swingSlBuffer = Math.max(atrVal * 1.15, pip(pair) * 10);
+  // Stop beyond swing origin (protected HL/LH) — Thissdax "protected low/high"
   let swingEntryPx = swingCandidate;
   let swingStopPx =
-    direction === "BUY" ? swingCandidate - swingSlBuffer : swingCandidate + swingSlBuffer;
+    direction === "BUY"
+      ? Math.min(tdSwing.origin, swingCandidate) - swingSlBuffer
+      : Math.max(tdSwing.origin, swingCandidate) + swingSlBuffer;
   let swingRiskPx = Math.abs(swingEntryPx - swingStopPx);
 
-  // Swing should be at/ deeper than LTF (HTF discount/premium), not a chase above OB
+  // Must not place live entry inside the liquidity (shallow) zone
+  if (priceInZone(swingEntryPx, tdSwing.liqTop, tdSwing.liqBottom)) {
+    // Push to entry zone mid
+    swingEntryPx = tdEntryMid;
+    swingStopPx =
+      direction === "BUY"
+        ? Math.min(tdSwing.origin, swingEntryPx) - swingSlBuffer
+        : Math.max(tdSwing.origin, swingEntryPx) + swingSlBuffer;
+    swingRiskPx = Math.abs(swingEntryPx - swingStopPx);
+  }
+
   const deeperOk =
     direction === "BUY"
-      ? swingEntryPx <= ltfEntryPrice + atrVal * 0.2
-      : swingEntryPx >= ltfEntryPrice - atrVal * 0.2;
+      ? swingEntryPx <= ltfEntryPrice + atrVal * 0.35
+      : swingEntryPx >= ltfEntryPrice - atrVal * 0.35;
   if (!deeperOk || swingRiskPx <= 0) {
     return {
       signal: null,
@@ -2352,6 +2633,8 @@ async function analyzePairFromCandles(
       structure: structure.structure,
       confluences: [
         `★ SWING ENTRY @ ${swingEntry} · SL ${swingStopLoss} · TP1 2R · TP2 4R`,
+        `Thissdax: sweep+BOS · Fib ${direction === "BUY" ? "discount" : "premium"} · ${tdSwing.liquidityClass} liquidity`,
+        `Avoid liquidity zone ${Number(Math.min(tdSwing.liqBottom, tdSwing.liqTop).toFixed(decimals))}–${Number(Math.max(tdSwing.liqBottom, tdSwing.liqTop).toFixed(decimals))} · enter deeper`,
         `LTF context only @ ${ltfEntry} (not the live order)`,
         ...confluences,
       ],

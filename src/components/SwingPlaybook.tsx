@@ -20,7 +20,7 @@ export function SwingPlaybook({ className }: { className?: string }) {
     {
       icon: Crosshair,
       title: "2 · Arm limit",
-      body: "Active swing signal = place a LIMIT at the swing entry (Daily zone). Ignore LTF prices — they are context only.",
+      body: "Active signal = LIMIT in the deep entry zone (after liquidity). Never in the shallow BOS grab zone. LTF is context only.",
       tone: "bull" as const,
     },
     {
@@ -57,7 +57,7 @@ export function SwingPlaybook({ className }: { className?: string }) {
             Market structure playbook · how to use this board
           </p>
           <p className="mt-0.5 text-[11px] text-muted-foreground">
-            Daily bias + 4H structure · limit at the swing zone · TP1 2R · TP2 4R
+            Sweep+BOS swing · Fib discount/premium · skip liquidity grab · TP1 2R · TP2 4R
           </p>
         </div>
         <ChevronDown
@@ -99,7 +99,7 @@ export function SwingPlaybook({ className }: { className?: string }) {
             ))}
           </div>
           <p className="mt-3 text-[10px] text-muted-foreground">
-            Structure first (BOS / levels) · session filter on · no LTF scalps on this desk ·
+            Structure first (sweep + BOS) · Fib value area · session filter · no LTF scalps ·
             educational analysis only, not financial advice.
           </p>
         </div>
