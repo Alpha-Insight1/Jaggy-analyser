@@ -1026,7 +1026,7 @@ const TWELVE_SYMBOL: Record<string, string> = {
   "GER40": "DAX",
   "NAS100": "IXIC",
   "UK100": "UKX",
-  "JPN225": "NI225",
+  "JPN225": "N225",  // Nikkei 225 on Twelve Data (JPX)
 };
 
 function isTwelveEligible(pair: string): boolean {
