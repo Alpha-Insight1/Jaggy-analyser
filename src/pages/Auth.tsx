@@ -12,9 +12,9 @@ import { toast } from "sonner";
 const ALLOW_SIGNUP = import.meta.env.VITE_ALLOW_SIGNUP !== "false";
 
 const highlights = [
-  { icon: Layers, text: "BOS / CHoCH structure with Order Block and FVG confluence" },
-  { icon: Target, text: "ATR-based risk model with transparent confidence scoring" },
-  { icon: ShieldCheck, text: "Private, sign-in-only access to every signal" },
+  { icon: Layers, text: "Swing desk only — Daily zone limits from market structure" },
+  { icon: Target, text: "Fixed targets: TP1 at 2R · TP2 at 4R · LTF is context only" },
+  { icon: ShieldCheck, text: "Clear actions: alert → arm limit → manage · no chase" },
 ];
 
 const Auth = () => {

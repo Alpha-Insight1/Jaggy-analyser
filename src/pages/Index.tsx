@@ -16,6 +16,7 @@ import { AccountButton } from "@/components/AccountButton";
 import { SectionHeader } from "@/components/SectionHeader";
 import { SummaryStrip } from "@/components/SummaryStrip";
 import { CategorySection, CategoryNav } from "@/components/CategorySection";
+import { SwingPlaybook } from "@/components/SwingPlaybook";
 import { groupSignals, groupDeveloping } from "@/lib/signalCategories";
 
 import { toast } from "sonner";
@@ -56,7 +57,7 @@ const Index = () => {
   const fireAlert = useCallback((s: Signal) => {
     const isBuy = s.direction === "BUY";
     toast.success(`${s.direction} ${s.pair} · ${s.confidence}%`, {
-      description: `Entry ${s.entry} · SL ${s.stopLoss} · TP ${s.takeProfit}`,
+      description: `Swing limit ${s.entry} · SL ${s.stopLoss} · TP1 ${s.takeProfit} (2R)`,
       duration: 12000,
       icon: isBuy ? <ArrowUp className="h-4 w-4 text-bull" /> : <ArrowDown className="h-4 w-4 text-bear" />,
     });
@@ -136,10 +137,10 @@ const Index = () => {
             <BrandLogo size={40} withWordmark className="shrink-0" />
             <div className="hidden leading-tight min-w-0 border-l border-border/50 pl-3 sm:block">
               <p className="text-[11px] text-muted-foreground truncate">
-                SMC multi-TF desk · Forex 15M · Indices/Gold 5M · Gold scalp
+                Swing desk · Daily zone limits · Market structure
               </p>
               <p className="text-[10px] text-muted-foreground/80 truncate">
-                A+ auto-book · structure TP · session filters
+                TP1 2R · TP2 4R · LTF is context only
               </p>
             </div>
           </div>
@@ -177,6 +178,8 @@ const Index = () => {
       <main className="container px-3 sm:px-4 py-4 sm:py-8 pb-safe">
         <MarketStatusBanner />
 
+        <SwingPlaybook />
+
         <SummaryStrip
           signals={data?.signals ?? []}
           developing={developing}
@@ -199,8 +202,8 @@ const Index = () => {
         <section className="mb-10">
           <SectionHeader
             icon={Activity}
-            title="Active signals"
-            subtitle="Confirmed setups — follow the action banner on each card"
+            title="Swing signals · ready to arm"
+            subtitle="Armed swing limits at the Daily zone — follow the action banner"
             right={
               lastUpdated && (
                 <span className="font-mono">Updated {lastUpdated.toLocaleTimeString()}</span>
@@ -213,9 +216,9 @@ const Index = () => {
           {data && data.signals.length === 0 && !loading && (
             <div className="rounded-xl border border-dashed border-border/60 surface-1 p-10 text-center">
               <Activity className="mx-auto h-8 w-8 text-muted-foreground/40" />
-              <p className="mt-3 font-medium">No active signals right now</p>
+              <p className="mt-3 font-medium">No swing signals ready right now</p>
               <p className="mt-1 text-sm text-muted-foreground">
-                Scanned {data.scanned.length} instruments · waiting for clean structure + entry confirmation
+                Scanned {data.scanned.length} instruments · waiting for Daily swing zone + structure alignment
               </p>
             </div>
           )}
@@ -272,8 +275,8 @@ const Index = () => {
         <section className="mb-10">
           <SectionHeader
             icon={Radar}
-            title="Developing setups"
-            subtitle="Watchlist only — set alerts, do not enter until confirmed"
+            title="Watchlist · not ready"
+            subtitle="Structure forming — alert only, never enter from this list"
             right={
               <>
                 {newsCount > 0 && (
@@ -289,7 +292,7 @@ const Index = () => {
 
           {developing.length === 0 && !loading && (
             <div className="rounded-xl border border-border/60 surface-1 p-6 text-center text-sm text-muted-foreground">
-              No setups developing — the market is quiet across scanned instruments.
+              No watchlist items — no swing structure forming across scanned instruments.
             </div>
           )}
 

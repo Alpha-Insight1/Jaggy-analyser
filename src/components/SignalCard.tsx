@@ -137,18 +137,9 @@ export const SignalCard = ({ signal, index }: { signal: Signal; index: number })
             >
               {signal.structure}
             </Badge>
-            {signal.signalStyle === "scalp" ? (
-              <Badge className="h-5 bg-gold/20 text-gold border-gold/40 text-[10px] font-bold uppercase">
-                Scalp
-              </Badge>
-            ) : (
-              <Badge
-                variant="outline"
-                className="h-5 border-border/60 bg-secondary text-[10px] font-medium uppercase"
-              >
-                Swing
-              </Badge>
-            )}
+            <Badge className="h-5 border-primary/40 bg-primary/15 text-[10px] font-bold uppercase text-primary">
+              Swing only
+            </Badge>
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">
             HTF bias: <span className="text-foreground/80">{signal.htf_bias}</span>
@@ -520,7 +511,7 @@ const CopyMtBlock = ({ signal }: { signal: Signal }) => {
         <div className="flex items-center gap-2">
           <Copy className="h-4 w-4 text-muted-foreground" />
           <span className="text-xs font-bold uppercase tracking-wider text-foreground">
-            MetaTrader Order
+            Swing order ticket
           </span>
         </div>
         <Button
