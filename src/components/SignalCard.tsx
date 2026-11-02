@@ -45,6 +45,10 @@ export interface Signal {
   ltfConfirmed?: boolean;
   awaitingLtfConfirmation?: boolean;
   autoTrigger?: boolean;
+  strategyModel?: "thissdax" | "ict_silver_bullet";
+  ictWindow?: "London" | "NY_AM" | "NY_PM";
+  ictWindowLabel?: string;
+  signalStyle?: "swing" | "scalp" | "ict_sb";
   poiType?: "order_block" | "structural_origin";
   poiLabel?: string;
   poiScore?: number;
@@ -141,17 +145,35 @@ export const SignalCard = ({ signal, index }: { signal: Signal; index: number })
             >
               {signal.structure}
             </Badge>
-            <Badge className="h-5 border-primary/40 bg-primary/15 text-[10px] font-bold uppercase text-primary">
-              Swing only
-            </Badge>
-            {signal.poiLabel && (
-              <Badge
-                variant="outline"
-                className="h-5 border-border/70 bg-secondary text-[10px] font-medium"
-              >
-                POI · {signal.poiType === "structural_origin" ? "Structural" : "Order block"}
-                {signal.poiScore != null ? ` · ${signal.poiScore}` : ""}
-              </Badge>
+            {signal.strategyModel === "ict_silver_bullet" || signal.signalStyle === "ict_sb" ? (
+              <>
+                <Badge className="h-5 border-amber-500/50 bg-amber-500/20 text-[10px] font-bold uppercase text-amber-400">
+                  ICT · Silver Bullet
+                </Badge>
+                {signal.ictWindowLabel && (
+                  <Badge variant="outline" className="h-5 border-amber-500/30 text-[10px] text-amber-200/90">
+                    {signal.ictWindowLabel}
+                  </Badge>
+                )}
+                <Badge variant="outline" className="h-5 border-border/70 text-[10px]">
+                  Test · arm limit
+                </Badge>
+              </>
+            ) : (
+              <>
+                <Badge className="h-5 border-primary/40 bg-primary/15 text-[10px] font-bold uppercase text-primary">
+                  Jaggy
+                </Badge>
+                {signal.poiLabel && (
+                  <Badge
+                    variant="outline"
+                    className="h-5 border-border/70 bg-secondary text-[10px] font-medium"
+                  >
+                    POI · {signal.poiType === "structural_origin" ? "Structural" : "Order block"}
+                    {signal.poiScore != null ? ` · ${signal.poiScore}` : ""}
+                  </Badge>
+                )}
+              </>
             )}
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">

@@ -57,8 +57,8 @@ export const SummaryStrip = ({ signals, developing, scanned, failed, loading }: 
     {
       icon: Activity,
       label: "Desk mode",
-      value: "DAX",
-      sub: "Thissdax rules only",
+      value: "Jaggy",
+      sub: "Swing · limit on touch",
       highlight: true,
       gold: true,
     },

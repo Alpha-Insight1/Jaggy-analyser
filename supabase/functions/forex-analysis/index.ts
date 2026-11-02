@@ -5,7 +5,7 @@
 //   Indices → 5M confirmation (swing)
 //   Gold   → 5M confirmation (swing) + 1H→5M BOS/CHoCH+disp scalp
 // Strategy pack: A sessions · B A+/B grade · C gold pullback · D structure bias · E trail · F corr caps
-// SCAN MODE: Thissdax/DAX strategy ONLY — no scalp · sweep+BOS · Fib P/D · ranked POI · limit 2R/4R
+// SCAN MODE: Jaggy swing + ICT Silver Bullet parallel · limit fill on touch · ranked POI · 2R/4R
 // Risk model: ATR(14)-based stop on structure TF, tighter ATR on scalp
 // Persists signals in `trades` and resolves them bar-by-bar
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
@@ -202,7 +202,11 @@ interface Signal {
   poiScore?: number;
   poiZone?: { top: number; bottom: number };
   // Multi-TF labels
-  signalStyle?: "swing" | "scalp";
+  signalStyle?: "swing" | "scalp" | "ict_sb";
+  /** Parallel model tag — user always sees this is ICT */
+  strategyModel?: "thissdax" | "ict_silver_bullet";
+  ictWindow?: "London" | "NY_AM" | "NY_PM";
+  ictWindowLabel?: string;
   structureTimeframe?: string;  // e.g. "4H" or "1H"
   setupGrade?: "A+" | "B";
   entryTimeframe?: string;      // e.g. "15M" | "5M"
@@ -2767,7 +2771,220 @@ async function analyzePairFromCandles(
 }
 
 
+// ---------- ICT SILVER BULLET (parallel model — always labeled ICT) ----------
+// Windows (New York local): 03:00–04:00 · 10:00–11:00 · 14:00–15:00
+// Pattern: liquidity sweep → displacement → FVG inside the hour → limit into FVG
+
+function getNyParts(unixSec: number): { hour: number; minute: number } {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const parts = fmt.formatToParts(new Date(unixSec * 1000));
+  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? "0");
+  const minute = Number(parts.find((p) => p.type === "minute")?.value ?? "0");
+  return { hour, minute };
+}
+
+function silverBulletWindow(unixSec: number): {
+  active: boolean;
+  name: "London" | "NY_AM" | "NY_PM" | null;
+  label: string;
+} {
+  const { hour } = getNyParts(unixSec);
+  if (hour === 3) return { active: true, name: "London", label: "London SB 03–04 NY" };
+  if (hour === 10) return { active: true, name: "NY_AM", label: "NY AM SB 10–11 NY" };
+  if (hour === 14) return { active: true, name: "NY_PM", label: "NY PM SB 14–15 NY" };
+  return { active: false, name: null, label: "" };
+}
+
+function findFvgInWindow(
+  candles: Candle[],
+  direction: "Bullish" | "Bearish",
+  windowStart: number,
+  windowEnd: number,
+): FVG | null {
+  for (let i = candles.length - 1; i >= 2; i--) {
+    const mid = candles[i - 1];
+    if (mid.time < windowStart || mid.time > windowEnd) continue;
+    const c1 = candles[i - 2];
+    const c3 = candles[i];
+    if (direction === "Bullish" && c3.low > c1.high) {
+      return { index: i - 1, top: c3.low, bottom: c1.high, type: "bullish" };
+    }
+    if (direction === "Bearish" && c3.high < c1.low) {
+      return { index: i - 1, top: c1.low, bottom: c3.high, type: "bearish" };
+    }
+  }
+  return null;
+}
+
+function findSweepInWindow(
+  candles: Candle[],
+  direction: "Bullish" | "Bearish",
+  windowStart: number,
+): { price: number; index: number } | null {
+  // Look at recent swings before/at window for a stop-run
+  const swings = findSwings(candles, 2);
+  const prior = candles.filter((c) => c.time < windowStart).slice(-40);
+  if (prior.length < 10) return null;
+  if (direction === "Bullish") {
+    const lows = swings.filter((s) => s.type === "low" && s.index < candles.length - 3);
+    for (let i = lows.length - 1; i >= Math.max(0, lows.length - 4); i--) {
+      const lvl = lows[i].price;
+      for (let j = Math.max(lows[i].index + 1, candles.length - 25); j < candles.length; j++) {
+        if (candles[j].time < windowStart - 3600) continue;
+        if (candles[j].low < lvl && candles[j].close > lvl) {
+          return { price: candles[j].low, index: j };
+        }
+      }
+    }
+  } else {
+    const highs = swings.filter((s) => s.type === "high" && s.index < candles.length - 3);
+    for (let i = highs.length - 1; i >= Math.max(0, highs.length - 4); i--) {
+      const lvl = highs[i].price;
+      for (let j = Math.max(highs[i].index + 1, candles.length - 25); j < candles.length; j++) {
+        if (candles[j].time < windowStart - 3600) continue;
+        if (candles[j].high > lvl && candles[j].close < lvl) {
+          return { price: candles[j].high, index: j };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+async function analyzeSilverBullet(
+  pair: string,
+  entryCandles: Candle[],
+  daily: Candle[],
+): Promise<Signal | null> {
+  if (entryCandles.length < 40) return null;
+  const last = entryCandles[entryCandles.length - 1];
+  const now = last.time;
+  const win = silverBulletWindow(now);
+  // Also allow if we are still in the same calendar hour that just printed the FVG
+  // (scan may lag a few minutes after the hour)
+  let activeWin = win;
+  if (!activeWin.active) {
+    // check last 12 bars for a bar that was inside a SB hour
+    for (let i = entryCandles.length - 1; i >= Math.max(0, entryCandles.length - 15); i--) {
+      const w = silverBulletWindow(entryCandles[i].time);
+      if (w.active) {
+        activeWin = w;
+        break;
+      }
+    }
+  }
+  if (!activeWin.active || !activeWin.name) return null;
+
+  // Window bounds for the active SB hour (approx using last in-window bar)
+  let windowStart = now;
+  let windowEnd = now;
+  for (const c of entryCandles.slice(-30)) {
+    const w = silverBulletWindow(c.time);
+    if (w.name === activeWin.name) {
+      windowStart = Math.min(windowStart, c.time);
+      windowEnd = Math.max(windowEnd, c.time + 300);
+    }
+  }
+  // Expand to full hour if thin
+  windowStart = windowStart - (windowStart % 3600);
+  windowEnd = windowStart + 3600;
+
+  // HTF bias from daily structure (soft — SB is still tradeable for testing)
+  const dSwings = findSwings(daily.slice(-60), 2);
+  const dStruct = analyzeStructure(daily.slice(-60), dSwings);
+  const bias = dStruct.trend;
+
+  // Prefer FVG with daily bias; if neutral, try both
+  const dirs: Array<"Bullish" | "Bearish"> =
+    bias === "Bullish" ? ["Bullish"] : bias === "Bearish" ? ["Bearish"] : ["Bullish", "Bearish"];
+
+  for (const dir of dirs) {
+    const fvg = findFvgInWindow(entryCandles, dir, windowStart, windowEnd);
+    if (!fvg) continue;
+    const sweep = findSweepInWindow(entryCandles, dir, windowStart);
+    // Soft: allow without perfect sweep for user testing, but tag confidence lower
+    const direction: "BUY" | "SELL" = dir === "Bullish" ? "BUY" : "SELL";
+    const entry = (fvg.top + fvg.bottom) / 2;
+    const atrVal = atr(entryCandles, 14) || Math.abs(fvg.top - fvg.bottom) * 2;
+    let stopLoss =
+      direction === "BUY"
+        ? Math.min(fvg.bottom, sweep?.price ?? fvg.bottom) - atrVal * 0.15
+        : Math.max(fvg.top, sweep?.price ?? fvg.top) + atrVal * 0.15;
+    let risk = Math.abs(entry - stopLoss);
+    if (risk < atrVal * 0.2) {
+      stopLoss = direction === "BUY" ? entry - atrVal * 0.5 : entry + atrVal * 0.5;
+      risk = Math.abs(entry - stopLoss);
+    }
+    if (risk <= 0) continue;
+    const takeProfit = direction === "BUY" ? entry + risk * 2 : entry - risk * 2;
+    const takeProfit2 = direction === "BUY" ? entry + risk * 3 : entry - risk * 3;
+    const decimals = priceDecimals(pair);
+    let confidence = 70;
+    if (sweep) confidence += 10;
+    if (bias === dir) confidence += 8;
+    if (activeWin.name === "NY_AM") confidence += 4;
+    confidence = Math.min(92, confidence);
+
+    const confluences = [
+      "⚡ ICT SILVER BULLET — parallel model (not Thissdax swing)",
+      `Window: ${activeWin.label}`,
+      sweep
+        ? `✓ Liquidity sweep @ ${sweep.price.toFixed(decimals)}`
+        : "◌ Sweep soft — FVG in window only (test mode)",
+      `✓ ${fvg.type} FVG entry zone ${fvg.bottom.toFixed(decimals)}–${fvg.top.toFixed(decimals)}`,
+      `HTF bias: ${bias}`,
+      "Arm limit at FVG mid · stop beyond sweep · target opposite liquidity",
+      "Always tradeable for strategy testing — log results",
+    ];
+
+    return {
+      pair,
+      direction,
+      entry: Number(entry.toFixed(decimals)),
+      stopLoss: Number(stopLoss.toFixed(decimals)),
+      takeProfit: Number(takeProfit.toFixed(decimals)),
+      takeProfit2: Number(takeProfit2.toFixed(decimals)),
+      riskReward: 2,
+      confidence,
+      structure: "BOS",
+      confluences,
+      confidenceBreakdown: [
+        { label: "ICT SB window", points: 25, hit: true },
+        { label: "FVG in window", points: 25, hit: true },
+        { label: "Liquidity sweep", points: 15, hit: !!sweep },
+        { label: "Daily bias aligned", points: 15, hit: bias === dir },
+      ],
+      currentPrice: Number(last.close.toFixed(decimals)),
+      timestamp: new Date().toISOString(),
+      htf_bias: bias === "Neutral" ? "Neutral" : bias,
+      entryModel: "FVG",
+      entryTrigger: "LIMIT",
+      entryZone: {
+        top: Number(fvg.top.toFixed(decimals)),
+        bottom: Number(fvg.bottom.toFixed(decimals)),
+      },
+      signalStyle: "ict_sb",
+      strategyModel: "ict_silver_bullet",
+      ictWindow: activeWin.name,
+      ictWindowLabel: activeWin.label,
+      structureTimeframe: "15M/5M",
+      entryTimeframe: "5M",
+      setupGrade: confidence >= 80 ? "A+" : "B",
+      autoTrigger: false,
+      poiType: undefined,
+      poiLabel: `ICT FVG · ${activeWin.label}`,
+    };
+  }
+  return null;
+}
+
 // ---------- GOLD SCALP: 1H trend + 5M BOS entry ----------
+
 // Separate from the swing path. Only runs for XAU/USD.
 async function analyzeGoldScalp(
   pair: string,
@@ -2954,6 +3171,28 @@ async function resolveOpenTrades(
     // Best price seen in the trade direction (for MFE / peak R)
     let peakPrice = entryPrice;
 
+    // LIMIT FILL: trade only becomes active when price trades through the limit entry.
+    // Until then the order is armed — no SL/TP resolution (avoids false book results).
+    let fillIdx = -1;
+    for (let i = 0; i < future.length; i++) {
+      const c = future[i];
+      if (isBuy && c.low <= entryPrice) {
+        fillIdx = i;
+        break;
+      }
+      if (!isBuy && c.high >= entryPrice) {
+        fillIdx = i;
+        break;
+      }
+    }
+    if (fillIdx < 0) {
+      // Still waiting for limit — leave open, no close
+      continue;
+    }
+    // Resolve only on candles at/after the fill
+    const afterFill = future.slice(fillIdx);
+    // Mark fill once (idempotent note in confluences is optional)
+
     let oneR = Math.abs(entryPrice - originalSL);
     // Reject microscopic stops (bad tick / bad SL) that produce 1000R+ glitches
     const minRisk = Math.max(entryPrice * 0.00015, isIndex(pair) || isGold(pair) || isCrypto(pair) ? 5 : 0);
@@ -2968,7 +3207,7 @@ async function resolveOpenTrades(
       return Math.max(-2, Math.min(12, r));
     };
 
-    for (const c of future) {
+    for (const c of afterFill) {
       // Skip candles before TP1 already recorded
       if (tp1HitAt && c.time <= tp1HitAt) continue;
 
@@ -3307,9 +3546,12 @@ async function saveSignalToBook(s: Signal): Promise<void> {
     return;
   }
 
+  const isIct = s.strategyModel === "ict_silver_bullet" || s.signalStyle === "ict_sb";
   await sendTradePush(
-    `Trade entered · ${s.pair} ${s.direction}`,
-    `Entry ${s.entry} · SL ${s.stopLoss} · TP1 ${s.takeProfit} · TP2 ${s.takeProfit2} · ${s.confidence}% confidence`,
+    isIct
+      ? `ICT SB limit armed · ${s.pair} ${s.direction}`
+      : `Jaggy limit armed · ${s.pair} ${s.direction}`,
+    `Limit ${s.entry} · SL ${s.stopLoss} · TP1 ${s.takeProfit} · TP2 ${s.takeProfit2} · triggers when price hits entry`,
     inserted.id,
   );
 }
@@ -3359,6 +3601,34 @@ Deno.serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+  }
+
+  // Optional: clear entire trade book so user can monitor strategy from a clean slate
+  try {
+    const raw = await req.text();
+    if (raw) {
+      const body = JSON.parse(raw) as { clearTradeBook?: boolean };
+      if (body.clearTradeBook === true) {
+        const { error: delFeat } = await db.from("signal_features").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+        if (delFeat) console.warn("signal_features clear:", delFeat.message);
+        const { error: delTrades, count } = await db
+          .from("trades")
+          .delete({ count: "exact" })
+          .neq("id", "00000000-0000-0000-0000-000000000000");
+        if (delTrades) {
+          return new Response(JSON.stringify({ error: delTrades.message }), {
+            status: 500,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+        return new Response(
+          JSON.stringify({ cleared: true, message: "Trade book cleared — ready to monitor Jaggy + ICT SB" }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+    }
+  } catch {
+    // no body or invalid JSON — normal scan
   }
 
   const results: {
@@ -3448,13 +3718,32 @@ Deno.serve(async (req) => {
       }
 
       const signals: Signal[] = [];
-      // Thissdax / DAX strategy ONLY — no scalp path, no parallel models
+      // Primary: Jaggy swing
       if (signal) {
-        // Force swing labels for the book
         signal.signalStyle = "swing";
+        signal.strategyModel = "thissdax"; // internal id; UI shows Jaggy
         signal.entryTrigger = signal.entryTrigger ?? "LIMIT";
         signals.push(signal);
         await saveSignalToBook(signal);
+      }
+
+      // Parallel: ICT Silver Bullet (always labeled ICT — user can arm to test)
+      try {
+        const sbTf =
+          entryInterval === "5m" && entryTf.length >= 40
+            ? entryTf
+            : await fetchCandles(pair, "5m", "5d", useTwelve || nearEntry);
+        const sb = await analyzeSilverBullet(
+          pair,
+          sbTf.length >= 40 ? sbTf : entryTf.length >= 40 ? entryTf : hourly,
+          daily,
+        );
+        if (sb) {
+          signals.push(sb);
+          await saveSignalToBook(sb);
+        }
+      } catch (sbErr) {
+        console.warn("ICT SB skip", pair, sbErr instanceof Error ? sbErr.message : sbErr);
       }
 
       return { pair, signals, developing, resolved, dataSource: useTwelve ? "twelve" : "yahoo" };
@@ -3486,15 +3775,14 @@ Deno.serve(async (req) => {
   }
 
   results.signals.sort((a, b) => b.confidence - a.confidence);
-  // Drop any residual non-swing styles (safety)
-  results.signals = results.signals.filter((s) => (s.signalStyle ?? "swing") === "swing");
-  (results as Record<string, unknown>).strategyMode = "thissdax_dax";
+  // Keep Thissdax swing + ICT Silver Bullet only
+  results.signals = results.signals.filter(
+    (s) => (s.signalStyle ?? "swing") === "swing" || s.signalStyle === "ict_sb",
+  );
+  (results as Record<string, unknown>).strategyMode = "jaggy + ict_silver_bullet";
   (results as Record<string, unknown>).strategyRules = [
-    "sweep+BOS structure",
-    "Fib premium/discount",
-    "liquidity no-entry zone",
-    "ranked POI (OB | structural origin)",
-    "limit only · TP1 2R · TP2 4R",
+    "Jaggy swing: sweep+BOS · Fib P/D · ranked POI · limit fills on touch · 2R/4R",
+    "ICT SB (parallel): NY windows 03-04 / 10-11 / 14-15 · FVG limit · testable",
   ];
   results.developing.sort((a, b) => b.proximity - a.proximity);
   // Attach feed meta for debugging (ignored by UI if unused)

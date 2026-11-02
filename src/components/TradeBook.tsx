@@ -16,6 +16,7 @@ interface Trade {
   confidence: number;
   structure: string;
   status: "open" | "win" | "loss";
+  // open = limit armed or in trade; engine fills when price hits entry
   opened_at: string;
   closed_at: string | null;
   close_price: number | null;
@@ -155,6 +156,38 @@ export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
     [actingId, refreshTrades],
   );
 
+
+  const clearBook = useCallback(async () => {
+    if (actingId) return;
+    if (
+      !confirm(
+        "Clear the entire trade book? This deletes all open and closed trades so you can monitor Jaggy + ICT from a clean slate.",
+      )
+    )
+      return;
+    setActingId("clear");
+    const { data, error } = await supabase.functions.invoke("forex-analysis", {
+      body: { clearTradeBook: true },
+    });
+    setActingId(null);
+    if (error) {
+      toast.error("Could not clear trade book", { description: error.message });
+      return;
+    }
+    // Fallback: client-side delete if edge returns but RLS allows
+    if (!(data as { cleared?: boolean })?.cleared) {
+      const { error: e2 } = await supabase.from("trades").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      if (e2) {
+        toast.error("Could not clear trades", { description: e2.message });
+        return;
+      }
+    }
+    toast.success("Trade book cleared", {
+      description: "Monitoring starts fresh for Jaggy + ICT Silver Bullet",
+    });
+    void refreshTrades();
+  }, [actingId, refreshTrades]);
+
   useEffect(() => {
     refreshTrades();
 
@@ -256,7 +289,15 @@ export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3 border-b border-border/50 pb-3">
         <div className="flex items-center gap-3">
           <div className="flex h-8 w-8 items-center justify-center rounded-md border border-border/60 surface-2">
-            <BookOpen className="h-4 w-4 text-gold" />
+            <button
+          type="button"
+          onClick={() => void clearBook()}
+          disabled={actingId === "clear"}
+          className="mr-2 rounded-md border border-border/60 px-2 py-1 text-[10px] uppercase tracking-wide text-muted-foreground hover:border-bear/40 hover:text-bear disabled:opacity-50"
+        >
+          {actingId === "clear" ? "Clearing…" : "Clear book"}
+        </button>
+        <BookOpen className="h-4 w-4 text-gold" />
           </div>
           <div>
             <h2 className="text-sm font-semibold tracking-tight">Trade book</h2>

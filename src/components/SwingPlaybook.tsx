@@ -54,10 +54,10 @@ export function SwingPlaybook({ className }: { className?: string }) {
             Swing desk only
           </p>
           <p className="mt-0.5 text-sm font-semibold text-foreground">
-            Thissdax / DAX strategy only · how to use this board
+            Jaggy swing strategy · how to use this board
           </p>
           <p className="mt-0.5 text-[11px] text-muted-foreground">
-            DAX rules: structure → liquidity → ranked POI · limit only · no scalps
+            Jaggy rules: structure → liquidity → ranked POI · limit fills on touch
           </p>
         </div>
         <ChevronDown
@@ -100,7 +100,7 @@ export function SwingPlaybook({ className }: { className?: string }) {
           </div>
           <p className="mt-3 text-[10px] text-muted-foreground">
             Structure first (sweep + BOS) · Fib value area · session filter · no LTF scalps ·
-            educational analysis only, not financial advice.
+            ICT Silver Bullet may appear as a parallel amber card — arm limit to test that model. Educational analysis only, not financial advice.
           </p>
         </div>
       )}

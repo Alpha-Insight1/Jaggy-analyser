@@ -56,8 +56,8 @@ const Index = () => {
 
   const fireAlert = useCallback((s: Signal) => {
     const isBuy = s.direction === "BUY";
-    toast.success(`${s.direction} ${s.pair} · ${s.confidence}%`, {
-      description: `Swing limit ${s.entry} · SL ${s.stopLoss} · TP1 ${s.takeProfit} (2R)`,
+    toast.success(`${s.strategyModel === "ict_silver_bullet" || s.signalStyle === "ict_sb" ? "ICT SB · " : "Jaggy · "}${s.direction} ${s.pair} · ${s.confidence}%`, {
+      description: `Limit ${s.entry} · fills on touch · SL ${s.stopLoss} · TP1 ${s.takeProfit}`,
       duration: 12000,
       icon: isBuy ? <ArrowUp className="h-4 w-4 text-bull" /> : <ArrowDown className="h-4 w-4 text-bear" />,
     });
