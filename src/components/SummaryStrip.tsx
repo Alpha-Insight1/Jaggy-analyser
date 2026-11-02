@@ -57,8 +57,8 @@ export const SummaryStrip = ({ signals, developing, scanned, failed, loading }: 
     {
       icon: Activity,
       label: "Desk mode",
-      value: "Swing",
-      sub: "Daily zone limits only",
+      value: "DAX",
+      sub: "Thissdax rules only",
       highlight: true,
       gold: true,
     },

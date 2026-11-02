@@ -54,10 +54,10 @@ export function SwingPlaybook({ className }: { className?: string }) {
             Swing desk only
           </p>
           <p className="mt-0.5 text-sm font-semibold text-foreground">
-            Market structure playbook · how to use this board
+            Thissdax / DAX strategy only · how to use this board
           </p>
           <p className="mt-0.5 text-[11px] text-muted-foreground">
-            Sweep+BOS swing · Fib discount/premium · skip liquidity grab · TP1 2R · TP2 4R
+            DAX rules: structure → liquidity → ranked POI · limit only · no scalps
           </p>
         </div>
         <ChevronDown

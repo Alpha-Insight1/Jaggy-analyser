@@ -5,7 +5,7 @@
 //   Indices → 5M confirmation (swing)
 //   Gold   → 5M confirmation (swing) + 1H→5M BOS/CHoCH+disp scalp
 // Strategy pack: A sessions · B A+/B grade · C gold pullback · D structure bias · E trail · F corr caps
-// Thissdax model: sweep+BOS swing · Fib premium/discount · avoid BOS-liquidity zone · TP1=2R TP2=4R
+// SCAN MODE: Thissdax/DAX strategy ONLY — no scalp · sweep+BOS · Fib P/D · ranked POI · limit 2R/4R
 // Risk model: ATR(14)-based stop on structure TF, tighter ATR on scalp
 // Persists signals in `trades` and resolves them bar-by-bar
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
@@ -3448,22 +3448,13 @@ Deno.serve(async (req) => {
       }
 
       const signals: Signal[] = [];
+      // Thissdax / DAX strategy ONLY — no scalp path, no parallel models
       if (signal) {
+        // Force swing labels for the book
+        signal.signalStyle = "swing";
+        signal.entryTrigger = signal.entryTrigger ?? "LIMIT";
         signals.push(signal);
         await saveSignalToBook(signal);
-      }
-
-      // Gold scalp path: 1H trend + 5M BOS
-      if (isGold(pair)) {
-        const fiveMin =
-          entryInterval === "5m" && entryTf.length >= 40
-            ? entryTf
-            : await fetchCandles(pair, "5m", "1mo", useTwelve || nearEntry);
-        const scalp = await analyzeGoldScalp(pair, hourly, fiveMin);
-        if (scalp) {
-          signals.push(scalp);
-          await saveSignalToBook(scalp);
-        }
       }
 
       return { pair, signals, developing, resolved, dataSource: useTwelve ? "twelve" : "yahoo" };
@@ -3495,6 +3486,16 @@ Deno.serve(async (req) => {
   }
 
   results.signals.sort((a, b) => b.confidence - a.confidence);
+  // Drop any residual non-swing styles (safety)
+  results.signals = results.signals.filter((s) => (s.signalStyle ?? "swing") === "swing");
+  (results as Record<string, unknown>).strategyMode = "thissdax_dax";
+  (results as Record<string, unknown>).strategyRules = [
+    "sweep+BOS structure",
+    "Fib premium/discount",
+    "liquidity no-entry zone",
+    "ranked POI (OB | structural origin)",
+    "limit only · TP1 2R · TP2 4R",
+  ];
   results.developing.sort((a, b) => b.proximity - a.proximity);
   // Attach feed meta for debugging (ignored by UI if unused)
   (results as Record<string, unknown>).twelveDataEnabled = Boolean(TWELVE_DATA_API_KEY);
