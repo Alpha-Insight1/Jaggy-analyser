@@ -489,6 +489,124 @@ function isFreshOB(candles: Candle[], ob: OrderBlock): boolean {
 // Find STACKED order blocks: 2+ fresh OBs in trend direction, separated by ≤2.5×ATR.
 // This is the exact pattern in your screenshot (Bu-OB at 1.205 + Bu-OB at 1.195).
 // Stacked OBs = layered demand/supply, dramatically higher reversal probability.
+
+// ---------- DAX / Thissdax swing levels (DISPLAY only — live entry stays LTF) ----------
+interface DaxSwing {
+  origin: number;
+  extreme: number;
+  equilibrium: number;
+  entryTop: number;
+  entryBottom: number;
+  structural: number;
+  inValueArea: boolean;
+}
+
+function buildDaxSwingLevels(
+  candles: Candle[],
+  swings: Swing[],
+  direction: "BUY" | "SELL",
+  currentPrice: number,
+  atrVal: number,
+): DaxSwing | null {
+  if (candles.length < 20 || swings.length < 4) return null;
+  const highs = swings.filter((s) => s.type === "high");
+  const lows = swings.filter((s) => s.type === "low");
+  if (highs.length < 2 || lows.length < 2) return null;
+
+  if (direction === "BUY") {
+    const hl = lows[lows.length - 1];
+    const prevHl = lows[lows.length - 2];
+    const hh = highs[highs.length - 1];
+    const origin = hl.price >= prevHl.price ? hl.price : prevHl.price;
+    const extreme = Math.max(hh.price, candles[candles.length - 1].high);
+    if (extreme <= origin) return null;
+    const equilibrium = origin + (extreme - origin) * 0.5;
+    return {
+      origin,
+      extreme,
+      equilibrium,
+      entryTop: equilibrium,
+      entryBottom: origin,
+      structural: origin,
+      inValueArea: currentPrice <= equilibrium + atrVal * 0.15,
+    };
+  }
+
+  const lh = highs[highs.length - 1];
+  const prevLh = highs[highs.length - 2];
+  const ll = lows[lows.length - 1];
+  const origin = lh.price <= prevLh.price ? lh.price : prevLh.price;
+  const extreme = Math.min(ll.price, candles[candles.length - 1].low);
+  if (origin <= extreme) return null;
+  const equilibrium = extreme + (origin - extreme) * 0.5;
+  return {
+    origin,
+    extreme,
+    equilibrium,
+    entryTop: origin,
+    entryBottom: equilibrium,
+    structural: origin,
+    inValueArea: currentPrice >= equilibrium - atrVal * 0.15,
+  };
+}
+
+/** Always produce swing entry/stop for cards using DAX rules. Book still uses LTF. */
+function daxSwingPlan(
+  pair: string,
+  direction: "BUY" | "SELL",
+  structureCandles: Candle[],
+  atrVal: number,
+  currentPrice: number,
+  ltfEntry: number,
+  strongZonePrice: number,
+): { swingEntry: number; swingStopLoss: number; swingRiskPips: number; note: string } {
+  const decimals = priceDecimals(pair);
+  const p = pip(pair);
+  const swings = findSwings(structureCandles, 2);
+  const dax = buildDaxSwingLevels(structureCandles, swings, direction, currentPrice, atrVal);
+  const slBuffer = Math.max(atrVal * 1.15, p * 10);
+
+  let candidate: number;
+  let note: string;
+  if (dax) {
+    const zoneMid = (dax.entryTop + dax.entryBottom) / 2;
+    candidate = zoneMid;
+    if (
+      strongZonePrice >= Math.min(dax.entryTop, dax.entryBottom) - atrVal * 0.2 &&
+      strongZonePrice <= Math.max(dax.entryTop, dax.entryBottom) + atrVal * 0.2
+    ) {
+      candidate = strongZonePrice;
+      note = "DAX swing · daily zone inside Fib value area";
+    } else {
+      if (dax.inValueArea) candidate = (zoneMid + dax.structural) / 2;
+      note = "DAX swing · Fib discount/premium + structure origin";
+    }
+    if (direction === "BUY" && candidate > ltfEntry) {
+      candidate = Math.min(candidate, dax.structural, zoneMid);
+    }
+    if (direction === "SELL" && candidate < ltfEntry) {
+      candidate = Math.max(candidate, dax.structural, zoneMid);
+    }
+  } else {
+    candidate =
+      direction === "BUY" ? ltfEntry - atrVal * 0.9 : ltfEntry + atrVal * 0.9;
+    if (direction === "BUY" && strongZonePrice < ltfEntry) candidate = strongZonePrice;
+    if (direction === "SELL" && strongZonePrice > ltfEntry) candidate = strongZonePrice;
+    note = "DAX swing · structural fallback";
+  }
+
+  const swingStop =
+    direction === "BUY" ? candidate - slBuffer : candidate + slBuffer;
+  const risk = Math.abs(candidate - swingStop) || atrVal;
+  return {
+    swingEntry: Number(candidate.toFixed(decimals)),
+    swingStopLoss: Number(swingStop.toFixed(decimals)),
+    swingRiskPips: Math.round(toPips(pair, risk)),
+    note,
+  };
+}
+
+
 function findStackedOBs(
   candles: Candle[],
   direction: "Bullish" | "Bearish",
@@ -1681,33 +1799,31 @@ async function analyzePairFromCandles(
           : dir === "BUY" ? pEntry + risk * 5 : pEntry - risk * 5;
         const riskPips = toPips(pair, risk);
 
-        // ---- SWING entry (always) ----
+        // ---- DAX swing (display) · LTF plan.entry stays the live trigger ----
         let swingEntry: number;
         let swingStopLoss: number;
         let swingRiskPips: number;
         {
-          const dailyZone =
-            zoneReaction?.z ??
+          const zonePx =
+            zoneReaction?.z.price ??
             dHtfZones
               .filter((z) =>
-                dir === "BUY"
-                  ? z.type === "support"
-                  : z.type === "resistance",
+                dir === "BUY" ? z.type === "support" : z.type === "resistance",
               )
-              .sort((a, b) => Math.abs(a.price - pEntry!) - Math.abs(b.price - pEntry!))[0];
-          const slBuffer = Math.max(atrVal * 1.2, p * 8);
-          let candidate = dailyZone?.price ?? (dir === "BUY" ? pEntry! - atrVal : pEntry! + atrVal);
-          const inDirection = dir === "BUY" ? candidate < pEntry! : candidate > pEntry!;
-          const gap = Math.abs(candidate - pEntry!);
-          if (!inDirection || gap < atrVal * 0.35) {
-            candidate =
-              dir === "BUY" ? pEntry! - atrVal * 0.85 : pEntry! + atrVal * 0.85;
-          }
-          const sSL = dir === "BUY" ? candidate - slBuffer : candidate + slBuffer;
-          const sRisk = Math.abs(candidate - sSL) || atrVal;
-          swingEntry = Number(candidate.toFixed(decimals));
-          swingStopLoss = Number(sSL.toFixed(decimals));
-          swingRiskPips = Math.round(toPips(pair, sRisk));
+              .sort((a, b) => Math.abs(a.price - pEntry!) - Math.abs(b.price - pEntry!))[0]?.price ??
+            pEntry!;
+          const plan = daxSwingPlan(
+            pair,
+            dir,
+            ltfTail,
+            atrVal,
+            currentPrice,
+            pEntry!,
+            zonePx,
+          );
+          swingEntry = plan.swingEntry;
+          swingStopLoss = plan.swingStopLoss;
+          swingRiskPips = plan.swingRiskPips;
         }
 
         plan = {
@@ -2210,29 +2326,25 @@ async function analyzePairFromCandles(
 
   const decimals = priceDecimals(pair);
 
-  // ---- SWING entry tier (always emitted for every pair) ----
-  // Prefer daily HTF strongZone when deeper than LTF; otherwise still publish a
-  // swing plan from the zone / OB distal so the card always shows swing levels.
+  // ---- DAX swing (DISPLAY only) · book still uses LTF `entry` ----
   let swingEntry: number;
   let swingStopLoss: number;
   let swingRiskPips: number;
   {
-    const slBuffer = Math.max(atrVal * 1.2, p * 8);
-    let candidate = strongZone.price;
-    const inDirection = direction === "BUY" ? candidate < entry : candidate > entry;
-    const gap = Math.abs(candidate - entry);
-    // If zone is not deeper, push a structural swing beyond LTF by ~0.8–1.2 ATR
-    if (!inDirection || gap < atrVal * 0.35) {
-      candidate =
-        direction === "BUY"
-          ? Math.min(entry, strongZone.price) - atrVal * 0.85
-          : Math.max(entry, strongZone.price) + atrVal * 0.85;
-    }
-    const sSL = direction === "BUY" ? candidate - slBuffer : candidate + slBuffer;
-    const sRisk = Math.abs(candidate - sSL) || atrVal;
-    swingEntry = Number(candidate.toFixed(decimals));
-    swingStopLoss = Number(sSL.toFixed(decimals));
-    swingRiskPips = Math.round(toPips(pair, sRisk));
+    const plan = daxSwingPlan(
+      pair,
+      direction,
+      ltfTail,
+      atrVal,
+      currentPrice,
+      entry,
+      strongZone.price,
+    );
+    swingEntry = plan.swingEntry;
+    swingStopLoss = plan.swingStopLoss;
+    swingRiskPips = plan.swingRiskPips;
+    confluences.push(`DAX swing @ ${swingEntry} · ${plan.note}`);
+    confluences.push(`Live trigger: LTF @ ${Number(entry.toFixed(decimals))} (book entry)`);
   }
 
   // ---- Split-entry smoothing (50/50 LTF + swing) ----
@@ -2460,17 +2572,22 @@ async function analyzeGoldScalp(
     setupGrade: bosOk ? "A+" : "B",
     structureTimeframe: "1H",
     entryTimeframe: "5M",
-    // Always show a swing plan (HTF-style) even on gold scalp cards
-    swingEntry: Number(
-      (direction === "BUY" ? entry - atrVal * 0.85 : entry + atrVal * 0.85).toFixed(decimals),
-    ),
-    swingStopLoss: Number(
-      (direction === "BUY"
-        ? entry - atrVal * 0.85 - atrVal * 1.2
-        : entry + atrVal * 0.85 + atrVal * 1.2
-      ).toFixed(decimals),
-    ),
-    swingRiskPips: Math.round(toPips(pair, atrVal * 1.2)),
+    ...(() => {
+      const plan = daxSwingPlan(
+        pair,
+        direction,
+        hourly.slice(-120),
+        atrVal * 3, // scale 5M atr up for swing display
+        currentPrice,
+        entry,
+        entry,
+      );
+      return {
+        swingEntry: plan.swingEntry,
+        swingStopLoss: plan.swingStopLoss,
+        swingRiskPips: plan.swingRiskPips,
+      };
+    })(),
   };
 }
 

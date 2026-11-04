@@ -147,7 +147,7 @@ export const DevelopingSetupCard = ({
             tone="bear"
           />
           <p className="col-span-2 text-[10px] text-muted-foreground">
-            Swing plan always shown · live trigger remains LTF entry above
+            DAX swing (display) · live trigger remains LTF entry above
             {plan.swingRiskPips != null && (
               <>
                 {" · "}Risk{" "}

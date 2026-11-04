@@ -330,7 +330,7 @@ export const SignalCard = ({ signal, index }: { signal: Signal; index: number })
       <div className="mt-3 rounded-lg border border-gold/40 bg-gold/5 p-3">
         <div className="mb-2 flex items-center justify-between gap-2">
           <span className="text-[10px] font-bold uppercase tracking-wider text-gold">
-            Swing entry · patient path
+            DAX swing · display only
           </span>
           <span className="rounded-md bg-gold/15 px-1.5 py-0.5 text-[9px] font-bold uppercase text-gold">
             HTF zone
@@ -351,7 +351,7 @@ export const SignalCard = ({ signal, index }: { signal: Signal; index: number })
           />
         </div>
         <p className="mt-2 text-[10px] text-muted-foreground">
-          Swing plan for every pair. Live book still triggers on{" "}
+          DAX structure + Fib zone. Live book still triggers on{" "}
           <span className="font-semibold text-foreground/85">LTF entry</span> above.
           {signal.swingRiskPips != null && (
             <>
