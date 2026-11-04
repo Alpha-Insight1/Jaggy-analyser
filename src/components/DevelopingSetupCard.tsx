@@ -132,18 +132,30 @@ export const DevelopingSetupCard = ({
         </div>
       )}
 
-      {plan?.swingEntry != null && (
-        <p className="mt-2 text-[10px] text-muted-foreground">
-          Deeper swing ref{" "}
-          <span className="font-mono text-foreground/80">{plan.swingEntry}</span>
-          {plan.swingStopLoss != null && (
-            <>
-              {" · "}SL{" "}
-              <span className="font-mono text-foreground/80">{plan.swingStopLoss}</span>
-            </>
-          )}
-          {" "}(context only — not the live trigger)
-        </p>
+      {plan && (
+        <div className="mt-2 grid grid-cols-2 gap-2 rounded-lg border border-gold/30 bg-gold/5 p-2.5">
+          <Zone
+            label="Swing entry"
+            value={String(plan.swingEntry ?? plan.entry)}
+            icon={Target}
+            tone={isBuy ? "bull" : "bear"}
+          />
+          <Zone
+            label="Swing stop"
+            value={String(plan.swingStopLoss ?? plan.stopLoss)}
+            icon={Shield}
+            tone="bear"
+          />
+          <p className="col-span-2 text-[10px] text-muted-foreground">
+            Swing plan always shown · live trigger remains LTF entry above
+            {plan.swingRiskPips != null && (
+              <>
+                {" · "}Risk{" "}
+                <span className="font-mono text-foreground/80">{plan.swingRiskPips}p</span>
+              </>
+            )}
+          </p>
+        </div>
       )}
 
       <ul className="mt-3 space-y-1">

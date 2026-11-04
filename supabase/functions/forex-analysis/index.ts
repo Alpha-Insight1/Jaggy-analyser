@@ -1681,37 +1681,33 @@ async function analyzePairFromCandles(
           : dir === "BUY" ? pEntry + risk * 5 : pEntry - risk * 5;
         const riskPips = toPips(pair, risk);
 
-        // ---- Deeper SWING entry tier ----
-        // Use the daily HTF zone (support for BUY / resistance for SELL) as a
-        // discount/premium fill. Falls back to nearest opposing HTF zone if no
-        // current reaction was tagged. Only emitted when meaningfully deeper
-        // than the LTF entry (>= 0.5×ATR away) so we don't duplicate it.
-        let swingEntry: number | undefined;
-        let swingStopLoss: number | undefined;
-        let swingRiskPips: number | undefined;
-        const dailyZone =
-          zoneReaction?.z ??
-          dHtfZones
-            .filter((z) =>
-              dir === "BUY"
-                ? z.type === "support" && z.price < pEntry!
-                : z.type === "resistance" && z.price > pEntry!,
-            )
-            .sort((a, b) => Math.abs(a.price - pEntry!) - Math.abs(b.price - pEntry!))[0];
-        if (dailyZone) {
-          const candidate = dailyZone.price;
-          const gap = Math.abs(candidate - pEntry);
-          const inDirection = dir === "BUY" ? candidate < pEntry : candidate > pEntry;
-          if (inDirection && gap >= atrVal * 0.5) {
-            const slBuffer = Math.max(atrVal * 1.2, p * 8);
-            const sSL = dir === "BUY" ? candidate - slBuffer : candidate + slBuffer;
-            const sRisk = Math.abs(candidate - sSL);
-            if (sRisk > 0) {
-              swingEntry = Number(candidate.toFixed(decimals));
-              swingStopLoss = Number(sSL.toFixed(decimals));
-              swingRiskPips = Math.round(toPips(pair, sRisk));
-            }
+        // ---- SWING entry (always) ----
+        let swingEntry: number;
+        let swingStopLoss: number;
+        let swingRiskPips: number;
+        {
+          const dailyZone =
+            zoneReaction?.z ??
+            dHtfZones
+              .filter((z) =>
+                dir === "BUY"
+                  ? z.type === "support"
+                  : z.type === "resistance",
+              )
+              .sort((a, b) => Math.abs(a.price - pEntry!) - Math.abs(b.price - pEntry!))[0];
+          const slBuffer = Math.max(atrVal * 1.2, p * 8);
+          let candidate = dailyZone?.price ?? (dir === "BUY" ? pEntry! - atrVal : pEntry! + atrVal);
+          const inDirection = dir === "BUY" ? candidate < pEntry! : candidate > pEntry!;
+          const gap = Math.abs(candidate - pEntry!);
+          if (!inDirection || gap < atrVal * 0.35) {
+            candidate =
+              dir === "BUY" ? pEntry! - atrVal * 0.85 : pEntry! + atrVal * 0.85;
           }
+          const sSL = dir === "BUY" ? candidate - slBuffer : candidate + slBuffer;
+          const sRisk = Math.abs(candidate - sSL) || atrVal;
+          swingEntry = Number(candidate.toFixed(decimals));
+          swingStopLoss = Number(sSL.toFixed(decimals));
+          swingRiskPips = Math.round(toPips(pair, sRisk));
         }
 
         plan = {
@@ -1720,9 +1716,9 @@ async function analyzePairFromCandles(
           takeProfit: Number(tp1.toFixed(decimals)),
           takeProfit2: Number(tp2.toFixed(decimals)),
           riskPips: Math.round(riskPips),
-          ...(swingEntry != null
-            ? { swingEntry, swingStopLoss, swingRiskPips }
-            : {}),
+          swingEntry,
+          swingStopLoss,
+          swingRiskPips,
         };
       }
     }
@@ -2214,27 +2210,29 @@ async function analyzePairFromCandles(
 
   const decimals = priceDecimals(pair);
 
-  // ---- Deeper SWING entry tier ----
-  // Mirror the developing-setup logic: the daily HTF zone (strongZone) is the
-  // true discount/premium fill. Only attach when it's meaningfully deeper than
-  // the LTF entry (>= 0.5×ATR away in the trade direction).
-  let swingEntry: number | undefined;
-  let swingStopLoss: number | undefined;
-  let swingRiskPips: number | undefined;
+  // ---- SWING entry tier (always emitted for every pair) ----
+  // Prefer daily HTF strongZone when deeper than LTF; otherwise still publish a
+  // swing plan from the zone / OB distal so the card always shows swing levels.
+  let swingEntry: number;
+  let swingStopLoss: number;
+  let swingRiskPips: number;
   {
-    const candidate = strongZone.price;
+    const slBuffer = Math.max(atrVal * 1.2, p * 8);
+    let candidate = strongZone.price;
     const inDirection = direction === "BUY" ? candidate < entry : candidate > entry;
     const gap = Math.abs(candidate - entry);
-    if (inDirection && gap >= atrVal * 0.5) {
-      const slBuffer = Math.max(atrVal * 1.2, p * 8);
-      const sSL = direction === "BUY" ? candidate - slBuffer : candidate + slBuffer;
-      const sRisk = Math.abs(candidate - sSL);
-      if (sRisk > 0) {
-        swingEntry = Number(candidate.toFixed(decimals));
-        swingStopLoss = Number(sSL.toFixed(decimals));
-        swingRiskPips = Math.round(toPips(pair, sRisk));
-      }
+    // If zone is not deeper, push a structural swing beyond LTF by ~0.8–1.2 ATR
+    if (!inDirection || gap < atrVal * 0.35) {
+      candidate =
+        direction === "BUY"
+          ? Math.min(entry, strongZone.price) - atrVal * 0.85
+          : Math.max(entry, strongZone.price) + atrVal * 0.85;
     }
+    const sSL = direction === "BUY" ? candidate - slBuffer : candidate + slBuffer;
+    const sRisk = Math.abs(candidate - sSL) || atrVal;
+    swingEntry = Number(candidate.toFixed(decimals));
+    swingStopLoss = Number(sSL.toFixed(decimals));
+    swingRiskPips = Math.round(toPips(pair, sRisk));
   }
 
   // ---- Split-entry smoothing (50/50 LTF + swing) ----
@@ -2296,7 +2294,9 @@ async function analyzePairFromCandles(
       currentPrice: Number(currentPrice.toFixed(decimals)),
       timestamp: new Date(lastCandle.time * 1000).toISOString(),
       htf_bias,
-      ...(swingEntry != null ? { swingEntry, swingStopLoss, swingRiskPips } : {}),
+      swingEntry,
+      swingStopLoss,
+      swingRiskPips,
       ...(splitEntry ? { splitEntry } : {}),
       ltfConfirmed: confidence >= 90 ? true : ltfConfirmed,
       awaitingLtfConfirmation: confidence >= 90 ? false : !ltfConfirmed,
@@ -2460,6 +2460,17 @@ async function analyzeGoldScalp(
     setupGrade: bosOk ? "A+" : "B",
     structureTimeframe: "1H",
     entryTimeframe: "5M",
+    // Always show a swing plan (HTF-style) even on gold scalp cards
+    swingEntry: Number(
+      (direction === "BUY" ? entry - atrVal * 0.85 : entry + atrVal * 0.85).toFixed(decimals),
+    ),
+    swingStopLoss: Number(
+      (direction === "BUY"
+        ? entry - atrVal * 0.85 - atrVal * 1.2
+        : entry + atrVal * 0.85 + atrVal * 1.2
+      ).toFixed(decimals),
+    ),
+    swingRiskPips: Math.round(toPips(pair, atrVal * 1.2)),
   };
 }
 

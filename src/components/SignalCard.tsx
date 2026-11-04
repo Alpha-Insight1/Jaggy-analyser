@@ -327,48 +327,40 @@ export const SignalCard = ({ signal, index }: { signal: Signal; index: number })
 
 
 
-      {signal.swingEntry != null ? (
-        <div className="mt-3 rounded-lg border border-gold/40 bg-gold/5 p-3">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-gold">
-              Swing entry · patient path
-            </span>
-            <span className="rounded-md bg-gold/15 px-1.5 py-0.5 text-[9px] font-bold uppercase text-gold">
-              Deeper HTF
-            </span>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <Stat
-              label="Swing entry"
-              value={String(signal.swingEntry)}
-              icon={Target}
-              tone={isBuy ? "bull" : "bear"}
-            />
-            <Stat
-              label="Swing stop"
-              value={String(signal.swingStopLoss ?? "—")}
-              icon={Shield}
-              tone="bear"
-            />
-          </div>
-          <p className="mt-2 text-[10px] text-muted-foreground">
-            Deeper discount/premium zone. Live book still triggers on{" "}
-            <span className="font-semibold text-foreground/85">LTF entry</span> above.
-            {signal.swingRiskPips != null && (
-              <>
-                {" · "}Risk{" "}
-                <span className="font-mono text-foreground/80">{signal.swingRiskPips}p</span>
-              </>
-            )}
-          </p>
+      <div className="mt-3 rounded-lg border border-gold/40 bg-gold/5 p-3">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-gold">
+            Swing entry · patient path
+          </span>
+          <span className="rounded-md bg-gold/15 px-1.5 py-0.5 text-[9px] font-bold uppercase text-gold">
+            HTF zone
+          </span>
         </div>
-      ) : (
-        signal.signalStyle !== "scalp" && (
-          <p className="mt-2 rounded-md border border-border/40 px-2.5 py-2 text-[10px] text-muted-foreground">
-            No separate swing level — HTF zone not deep enough vs LTF. Use LTF entry only.
-          </p>
-        )
-      )}
+        <div className="grid grid-cols-2 gap-3">
+          <Stat
+            label="Swing entry"
+            value={String(signal.swingEntry ?? signal.entry)}
+            icon={Target}
+            tone={isBuy ? "bull" : "bear"}
+          />
+          <Stat
+            label="Swing stop"
+            value={String(signal.swingStopLoss ?? signal.stopLoss)}
+            icon={Shield}
+            tone="bear"
+          />
+        </div>
+        <p className="mt-2 text-[10px] text-muted-foreground">
+          Swing plan for every pair. Live book still triggers on{" "}
+          <span className="font-semibold text-foreground/85">LTF entry</span> above.
+          {signal.swingRiskPips != null && (
+            <>
+              {" · "}Risk{" "}
+              <span className="font-mono text-foreground/80">{signal.swingRiskPips}p</span>
+            </>
+          )}
+        </p>
+      </div>
 
       <RiskCalculator
         pair={signal.pair}
