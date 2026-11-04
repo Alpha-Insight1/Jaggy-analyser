@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 
 /** How to use the SMC multi-TF Jaggy board (Path A LTF + Path B swing). */
 export function SwingPlaybook({ className }: { className?: string }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
 
   const steps = [
     {
@@ -47,10 +47,10 @@ export function SwingPlaybook({ className }: { className?: string }) {
       >
         <div className="min-w-0">
           <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
-            Jaggy SMC desk
+            How this desk works
           </p>
           <p className="mt-0.5 text-sm font-semibold text-foreground">
-            Multi-TF structure · how to use this board
+            LTF limits · structure bias · trade book monitoring
           </p>
           <p className="mt-0.5 text-[11px] text-muted-foreground">
             Daily bias + 4H structure · Forex 15M / Indices &amp; Gold 5M · optional gold scalp

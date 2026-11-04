@@ -137,10 +137,10 @@ const Index = () => {
             <BrandLogo size={40} withWordmark className="shrink-0" />
             <div className="hidden leading-tight min-w-0 border-l border-border/50 pl-3 sm:block">
               <p className="text-[11px] text-muted-foreground truncate">
-                SMC multi-TF desk · Forex 15M · Indices/Gold 5M
+                LTF desk · monitor fills · Forex 15M · Indices & Gold 5M
               </p>
               <p className="text-[10px] text-muted-foreground/80 truncate">
-                A+ auto-book · structure TP · dual path entry
+                LTF limits on the book · A+ preferred · track live R
               </p>
             </div>
           </div>
@@ -175,7 +175,7 @@ const Index = () => {
         </div>
       </header>
 
-      <main className="container px-3 sm:px-4 py-4 sm:py-8 pb-safe">
+      <main className="container max-w-7xl px-3 sm:px-5 py-5 sm:py-7 pb-safe">
         <MarketStatusBanner />
 
         <SwingPlaybook />
@@ -188,6 +188,23 @@ const Index = () => {
           loading={loading && !data}
         />
 
+        <div className="mb-8 flex flex-col gap-1 rounded-xl border border-border/50 bg-card/50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">LTF monitoring desk</p>
+            <p className="text-sm text-muted-foreground">
+              Live signals arm an LTF limit. When price hits entry the book tracks SL · TP1 · TP2 so you can judge the strategy.
+            </p>
+          </div>
+          <div className="mt-2 flex gap-2 sm:mt-0">
+            <span className="rounded-full border border-bull/30 bg-bull/10 px-2.5 py-0.5 text-[10px] font-semibold uppercase text-bull">
+              {(data?.signals ?? []).filter((s) => s.direction === "BUY").length} long
+            </span>
+            <span className="rounded-full border border-bear/30 bg-bear/10 px-2.5 py-0.5 text-[10px] font-semibold uppercase text-bear">
+              {(data?.signals ?? []).filter((s) => s.direction === "SELL").length} short
+            </span>
+          </div>
+        </div>
+
         {error && (
           <div className="mb-6 flex items-start gap-3 rounded-lg border border-bear/30 bg-bear/10 p-4 text-sm">
             <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-bear" />
@@ -198,12 +215,38 @@ const Index = () => {
           </div>
         )}
 
+
+        {/* Trade book first — monitor LTF fills */}
+        <section className="mb-10">
+          <SectionHeader
+            icon={Activity}
+            title="Trade book · LTF monitoring"
+            subtitle="Armed LTF limits · fills on touch · track SL / TP1 / TP2 live"
+          />
+          <div className="mt-4 space-y-4">
+            <TradeBook priceMap={priceMap} />
+            <div className="grid gap-4 lg:grid-cols-2">
+              <EquityCurve />
+              <PerPairStats />
+            </div>
+          </div>
+        </section>
+
+        <section className="mb-10">
+          <SectionHeader
+            icon={Activity}
+            title="Paper capital"
+            subtitle="Position sizing from your account settings"
+          />
+          <CapitalPanel priceMap={priceMap} />
+        </section>
+
         {/* ——— ACTIVE SIGNALS (primary) ——— */}
         <section className="mb-10">
           <SectionHeader
             icon={Activity}
-            title="Active signals"
-            subtitle="Confirmed setups — follow entry model on each card"
+            title="Live LTF signals"
+            subtitle="Confirmed setups — LTF limit is the live trigger on the trade book"
             right={
               lastUpdated && (
                 <span className="font-mono">Updated {lastUpdated.toLocaleTimeString()}</span>
@@ -216,9 +259,9 @@ const Index = () => {
           {data && data.signals.length === 0 && !loading && (
             <div className="rounded-xl border border-dashed border-border/60 surface-1 p-10 text-center">
               <Activity className="mx-auto h-8 w-8 text-muted-foreground/40" />
-              <p className="mt-3 font-medium">No swing signals ready right now</p>
+              <p className="mt-3 font-medium">No live LTF signals right now</p>
               <p className="mt-1 text-sm text-muted-foreground">
-                Scanned {data.scanned.length} instruments · waiting for Daily swing zone + structure alignment
+                Scanned {data.scanned.length} instruments · waiting for structure + LTF confirmation
               </p>
             </div>
           )}
@@ -275,8 +318,8 @@ const Index = () => {
         <section className="mb-10">
           <SectionHeader
             icon={Radar}
-            title="Developing setups"
-            subtitle="Forming structure — wait for a full signal before entering"
+            title="Developing"
+            subtitle="Building confluence — not on the book yet"
             right={
               <>
                 {newsCount > 0 && (
@@ -325,27 +368,6 @@ const Index = () => {
           })()}
         </section>
 
-        {/* Managed paper capital */}
-        <section className="mb-10">
-          <SectionHeader
-            icon={Activity}
-            title="Paper capital"
-            subtitle="Position sizing from your account settings"
-          />
-          <CapitalPanel priceMap={priceMap} />
-        </section>
-
-        {/* Performance desk */}
-        <section className="mb-4">
-          <SectionHeader
-            icon={Activity}
-            title="Performance desk"
-            subtitle="Open trades · equity · last 30 days · by market"
-          />
-        </section>
-        <TradeBook priceMap={priceMap} />
-        <EquityCurve />
-        <PerPairStats />
 
         <footer className="mt-12 flex flex-col items-center justify-between gap-2 border-t border-border/60 py-6 text-xs text-muted-foreground sm:flex-row">
           <p>© {new Date().getFullYear()} Jaggy Analyser</p>

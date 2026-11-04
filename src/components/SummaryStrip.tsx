@@ -1,17 +1,23 @@
-import { Activity, Radar, Gauge, ScanLine, Target } from "lucide-react";
+import { Activity, Gauge, Radar, ScanLine, Target } from "lucide-react";
+import { cn } from "@/lib/utils";
 import type { Signal } from "@/components/SignalCard";
 import type { DevelopingSetup } from "@/components/DevelopingSetupCard";
-import { cn } from "@/lib/utils";
 
-interface Props {
+interface SummaryStripProps {
   signals: Signal[];
   developing: DevelopingSetup[];
   scanned: number;
   failed: number;
-  loading: boolean;
+  loading?: boolean;
 }
 
-export const SummaryStrip = ({ signals, developing, scanned, failed, loading }: Props) => {
+export function SummaryStrip({
+  signals,
+  developing,
+  scanned,
+  failed,
+  loading,
+}: SummaryStripProps) {
   const buys = signals.filter((s) => s.direction === "BUY").length;
   const sells = signals.length - buys;
   const aPlus = signals.filter((s) => s.setupGrade === "A+").length;
@@ -22,7 +28,7 @@ export const SummaryStrip = ({ signals, developing, scanned, failed, loading }: 
   const items = [
     {
       icon: Target,
-      label: "Swing signals",
+      label: "Live signals",
       value: signals.length,
       sub: signals.length ? (
         <>
@@ -37,52 +43,52 @@ export const SummaryStrip = ({ signals, developing, scanned, failed, loading }: 
           )}
         </>
       ) : (
-        "No armed swing setups"
+        "Waiting for setup"
       ),
       highlight: signals.length > 0,
     },
     {
       icon: Radar,
-      label: "Watchlist",
+      label: "Developing",
       value: developing.length,
-      sub: "Forming — not entries",
+      sub: "Not live yet",
       highlight: false,
     },
     {
       icon: Gauge,
       label: "Avg confidence",
       value: avgConf === null ? "—" : `${avgConf}%`,
-      sub: "Targets fixed at 2R / 4R",
+      sub: "LTF entry on book",
     },
     {
       icon: Activity,
-      label: "Desk mode",
-      value: "SMC",
-      sub: "Multi-TF · Path A/B",
+      label: "Desk",
+      value: "Jaggy",
+      sub: "SMC · LTF trigger",
       highlight: true,
       gold: true,
     },
     {
       icon: ScanLine,
-      label: "Scanned",
+      label: "Universe",
       value: scanned,
-      sub: failed ? <span className="text-bear">{failed} failed</span> : "Feeds healthy",
+      sub: failed ? <span className="text-bear">{failed} failed</span> : "Feeds OK",
     },
   ];
 
   return (
-    <div className="mb-6 grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-3 lg:grid-cols-5">
+    <div className="mb-8 grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-3 lg:grid-cols-5">
       {items.map(({ icon: Icon, label, value, sub, highlight, gold }) => (
         <div
           key={label}
           className={cn(
-            "rounded-lg border p-4 shadow-card transition-smooth",
+            "relative overflow-hidden rounded-xl border p-3.5 sm:p-4 transition-smooth",
             gold && highlight
-              ? "border-primary/40 bg-primary/5"
+              ? "border-primary/35 bg-gradient-to-br from-primary/10 to-transparent"
               : highlight
-                ? "border-border/80 surface-1"
-                : "border-border/50 surface-1",
-            loading && "opacity-70",
+                ? "border-border/70 bg-card/80"
+                : "border-border/40 bg-card/40",
+            loading && "opacity-60",
           )}
         >
           <div className="flex items-center justify-between gap-2">
@@ -92,23 +98,23 @@ export const SummaryStrip = ({ signals, developing, scanned, failed, loading }: 
                 gold && highlight ? "text-primary" : "text-muted-foreground/70",
               )}
             />
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
               {label}
             </span>
           </div>
           <p
             className={cn(
-              "mt-2 font-mono text-xl font-semibold tabular-nums tracking-tight",
+              "mt-2 font-mono text-2xl font-semibold tracking-tight tabular-nums",
               gold && highlight && "text-primary",
             )}
           >
             {value}
           </p>
-          <p className="mt-1 text-[11px] text-muted-foreground">{sub}</p>
+          <div className="mt-1 text-[11px] text-muted-foreground">{sub}</div>
         </div>
       ))}
     </div>
   );
-};
+}
 
 export default SummaryStrip;

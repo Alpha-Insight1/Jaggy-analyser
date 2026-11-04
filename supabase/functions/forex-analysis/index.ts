@@ -2861,13 +2861,18 @@ async function saveSignalToBook(s: Signal): Promise<void> {
     }
   }
 
-  // B: Only auto-book A+ setups (B-grade stays on developing feed only)
+  // Book LTF trades for monitoring: A+ always; B when confidence ≥ 70
   const grade = (s as Signal & { setupGrade?: string }).setupGrade ?? "A+";
-  if (grade !== "A+") {
-    console.warn(`Skip book ${s.pair}: setup grade ${grade} (developing only)`);
+  const conf = Number(s.confidence) || 0;
+  if (grade !== "A+" && conf < 70) {
+    console.warn(`Skip book ${s.pair}: grade ${grade} conf ${conf} (need A+ or ≥70%)`);
     return;
   }
 
+  const bookConfluences = [
+    `LTF entry trigger · ${s.entryTimeframe ?? "15M/5M"}`,
+    ...(Array.isArray(s.confluences) ? s.confluences : []),
+  ];
   const { data: inserted, error } = await db.from("trades").insert({
     pair: s.pair,
     direction: s.direction,
@@ -2879,7 +2884,7 @@ async function saveSignalToBook(s: Signal): Promise<void> {
     confidence: s.confidence,
     structure: s.structure,
     htf_bias: s.htf_bias,
-    confluences: s.confluences,
+    confluences: bookConfluences,
     status: "open",
     signal_timestamp: s.timestamp,
     initial_stop_loss: s.stopLoss,
