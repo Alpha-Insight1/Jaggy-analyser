@@ -276,7 +276,7 @@ const Index = () => {
           <SectionHeader
             icon={Radar}
             title="Developing setups"
-            subtitle="Watchlist — forming structure, not full confirmation"
+            subtitle="Forming structure — wait for a full signal before entering"
             right={
               <>
                 {newsCount > 0 && (

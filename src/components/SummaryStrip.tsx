@@ -45,7 +45,7 @@ export const SummaryStrip = ({ signals, developing, scanned, failed, loading }: 
       icon: Radar,
       label: "Watchlist",
       value: developing.length,
-      sub: "Alert only — not entries",
+      sub: "Forming — not entries",
       highlight: false,
     },
     {

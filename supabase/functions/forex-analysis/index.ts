@@ -981,7 +981,7 @@ function priceBand(pair: string): { min: number; max: number } | null {
   if (pair === "NAS100") return { min: 5000, max: 40000 };
   if (pair === "SPX500") return { min: 1500, max: 10000 };
   if (pair === "UK100") return { min: 4000, max: 15000 };
-  if (pair === "JPN225") return { min: 10000, max: 60000 };
+  if (pair === "JPN225") return { min: 10000, max: 120000 }; // Nikkei often 30k–60k+
   // FX majors / crosses
   if (pair.includes("JPY")) return { min: 50, max: 300 };
   if (pair.includes("/")) return { min: 0.2, max: 5 };
@@ -1025,7 +1025,7 @@ const TWELVE_SYMBOL: Record<string, string> = {
   "GER40": "DAX",
   "NAS100": "IXIC",
   "UK100": "UKX",
-  "JPN225": "NI225",
+  "JPN225": "N225",
 };
 
 function isTwelveEligible(pair: string): boolean {
@@ -2366,7 +2366,12 @@ async function analyzeGoldScalp(
   const currentPrice = last.close;
 
   // Prefer entry on retest of the 5M OB created by the break
-  const mObs = findOrderBlocks(mTail, mSwings).filter((o) =>
+  // findAllOrderBlocks expects Bullish|Bearish direction (not BUY/SELL)
+  const mObs = findAllOrderBlocks(
+    mTail,
+    direction === "BUY" ? "Bullish" : "Bearish",
+    80,
+  ).filter((o) =>
     direction === "BUY" ? o.type === "bullish" : o.type === "bearish",
   );
   const recentOb = mObs.length ? mObs[mObs.length - 1] : null;
@@ -2507,6 +2512,16 @@ async function resolveOpenTrades(
     // Best price seen in the trade direction (for MFE / peak R)
     let peakPrice = entryPrice;
 
+    // LTF limit fill: only manage SL/TP after price trades through entry
+    let fillIdx = -1;
+    for (let i = 0; i < future.length; i++) {
+      const c = future[i];
+      if (isBuy && c.low <= entryPrice) { fillIdx = i; break; }
+      if (!isBuy && c.high >= entryPrice) { fillIdx = i; break; }
+    }
+    if (fillIdx < 0) continue; // still waiting for LTF limit
+    const afterFill = future.slice(fillIdx);
+
     let oneR = Math.abs(entryPrice - originalSL);
     // Reject microscopic stops (bad tick / bad SL) that produce 1000R+ glitches
     const minRisk = Math.max(entryPrice * 0.00015, isIndex(pair) || isGold(pair) || isCrypto(pair) ? 5 : 0);
@@ -2521,7 +2536,7 @@ async function resolveOpenTrades(
       return Math.max(-2, Math.min(12, r));
     };
 
-    for (const c of future) {
+    for (const c of afterFill) {
       // Skip candles before TP1 already recorded
       if (tp1HitAt && c.time <= tp1HitAt) continue;
 
@@ -2876,8 +2891,8 @@ async function saveSignalToBook(s: Signal): Promise<void> {
   }
 
   await sendTradePush(
-    `Trade entered · ${s.pair} ${s.direction}`,
-    `Entry ${s.entry} · SL ${s.stopLoss} · TP1 ${s.takeProfit} · TP2 ${s.takeProfit2} · ${s.confidence}% confidence`,
+    `LTF limit armed · ${s.pair} ${s.direction}`,
+    `LTF ${s.entry} · SL ${s.stopLoss} · TP1 ${s.takeProfit} · TP2 ${s.takeProfit2} · triggers on touch · ${s.confidence}%`,
     inserted.id,
   );
 }

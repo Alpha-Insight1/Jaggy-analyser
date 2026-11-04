@@ -10,7 +10,7 @@ export function SwingPlaybook({ className }: { className?: string }) {
     {
       icon: Bell,
       title: "1 · Watchlist",
-      body: "Developing cards = structure forming. Set alerts near the zone. Do not force entries.",
+      body: "Developing cards = structure forming. Wait for a confirmed signal card before entering.",
       tone: "gold" as const,
     },
     {

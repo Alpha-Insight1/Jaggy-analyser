@@ -241,7 +241,7 @@ export const SignalCard = ({ signal, index }: { signal: Signal; index: number })
       </div>
 
       <div className="mt-4 grid grid-cols-2 gap-3 rounded-lg surface-2 p-3">
-        <Stat label="Entry" value={String(signal.entry)} icon={Activity} />
+        <Stat label="LTF entry" value={String(signal.entry)} icon={Activity} />
         <Stat label="Stop" value={String(signal.stopLoss)} icon={Shield} tone="bear" />
         <Stat
           label={`TP1 (${(Math.abs(signal.takeProfit - signal.entry) / Math.abs(signal.entry - signal.stopLoss)).toFixed(1)}R)`}
@@ -261,72 +261,7 @@ export const SignalCard = ({ signal, index }: { signal: Signal; index: number })
         )}
       </div>
 
-      {/* Dual path: LTF (fast) vs Swing (patient) */}
-      <div className="mt-3 space-y-2">
-        <div className="rounded-lg border border-border/60 surface-2 p-3">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-              Path A · LTF entry (faster)
-            </span>
-            <span className="text-[9px] text-muted-foreground">
-              {signal.entryTimeframe ?? "15M/5M"} trigger
-            </span>
-          </div>
-          <div className="grid grid-cols-3 gap-2 text-[11px]">
-            <div>
-              <p className="text-[9px] uppercase text-muted-foreground">Entry</p>
-              <p className="font-mono font-semibold">{signal.entry}</p>
-            </div>
-            <div>
-              <p className="text-[9px] uppercase text-muted-foreground">Stop</p>
-              <p className="font-mono font-semibold text-bear">{signal.stopLoss}</p>
-            </div>
-            <div>
-              <p className="text-[9px] uppercase text-muted-foreground">TP1</p>
-              <p className="font-mono font-semibold text-bull">{signal.takeProfit}</p>
-            </div>
-          </div>
-        </div>
-
-        {signal.swingEntry != null ? (
-          <div className="rounded-lg border border-gold/50 bg-gold/5 p-3">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-gold">
-                Path B · Swing entry (patient)
-              </span>
-              <span className="rounded-md bg-gold/20 px-1.5 py-0.5 text-[9px] font-bold uppercase text-gold">
-                Limit style
-              </span>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <Stat
-                label="Swing entry"
-                value={String(signal.swingEntry)}
-                icon={Target}
-                tone={isBuy ? "bull" : "bear"}
-              />
-              <Stat
-                label="Swing stop"
-                value={String(signal.swingStopLoss)}
-                icon={Shield}
-                tone="bear"
-              />
-            </div>
-            <p className="mt-2 text-[10px] text-muted-foreground">
-              Deeper HTF zone (like a 4H/Daily blue line). Skip Path A if you only want this fill.
-              Risk{" "}
-              <span className="font-mono text-foreground/80">{signal.swingRiskPips}p</span>
-              {" · "}Same TP1/TP2. Invalidation beyond swing stop.
-            </p>
-          </div>
-        ) : (
-          signal.signalStyle !== "scalp" && (
-            <p className="rounded-md border border-border/40 px-2.5 py-2 text-[10px] text-muted-foreground">
-              No separate swing level — HTF zone is not deep enough vs LTF entry. Use Path A only.
-            </p>
-          )
-        )}
-      </div>
+      
 
       {/* Split-entry smoothing block — scale in 50/50 across LTF + swing tiers */}
       {signal.splitEntry && (
@@ -392,6 +327,13 @@ export const SignalCard = ({ signal, index }: { signal: Signal; index: number })
 
 
 
+      {signal.swingEntry != null && (
+        <p className="mt-2 text-[10px] text-muted-foreground">
+          Swing ref <span className="font-mono text-foreground/80">{signal.swingEntry}</span>
+          {" · "}context only — live limit is LTF entry above
+        </p>
+      )}
+
       <RiskCalculator
         pair={signal.pair}
         direction={signal.direction}
@@ -455,7 +397,7 @@ const CopyMtBlock = ({ signal }: { signal: Signal }) => {
     : (signal.direction === "BUY" ? "BUY LIMIT" : "SELL LIMIT");
   const isBuy = signal.direction === "BUY";
 
-  const hasSplit = !!signal.splitEntry;
+  const hasSplit = false; // single ticket only — prefer swing levels when present
   const tier1Price = hasSplit ? signal.splitEntry!.tier1 : signal.entry;
   const tier2Price = hasSplit ? signal.splitEntry!.tier2 : null;
   const ticket = hasSplit
@@ -531,7 +473,7 @@ const CopyMtBlock = ({ signal }: { signal: Signal }) => {
           </>
         ) : (
           <>
-            <CopyField label="Entry" value={signal.entry} onCopy={copy} />
+            <CopyField label="LTF Entry" value={signal.entry} onCopy={copy} />
             <CopyField label="SL" value={signal.stopLoss} onCopy={copy} />
           </>
         )}
