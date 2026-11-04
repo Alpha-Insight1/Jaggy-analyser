@@ -5,7 +5,6 @@
 //   Indices → 5M confirmation (swing)
 //   Gold   → 5M confirmation (swing) + 1H→5M BOS/CHoCH+disp scalp
 // Strategy pack: A sessions · B A+/B grade · C gold pullback · D structure bias · E trail · F corr caps
-// SCAN MODE: Jaggy swing + ICT Silver Bullet parallel · limit fill on touch · ranked POI · 2R/4R
 // Risk model: ATR(14)-based stop on structure TF, tighter ATR on scalp
 // Persists signals in `trades` and resolves them bar-by-bar
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
@@ -153,9 +152,9 @@ interface Signal {
   direction: "BUY" | "SELL";
   entry: number;
   stopLoss: number;
-  takeProfit: number;        // TP1 — fixed 2R from swing risk
-  takeProfit2: number;       // TP2 — fixed 4R from swing risk
-  riskReward: number;        // Reported RR = TP1 (2R)
+  takeProfit: number;        // TP1 — partial close (5R)
+  takeProfit2: number;       // TP2 — runner (15R)
+  riskReward: number;        // Reported RR = TP1 (primary target); TP2 is runner only
   confidence: number;
   structure: "BOS" | "CHoCH";
   confluences: string[];
@@ -165,18 +164,18 @@ interface Signal {
   currentPrice: number;
   timestamp: string;
   htf_bias: "Bullish" | "Bearish" | "Neutral";
-  // SWING-FIRST: primary live order is Daily HTF zone. LTF is context only.
-  ltfEntry?: number;
-  ltfStopLoss?: number;
+  // Optional deeper SWING entry tier — fills at the daily HTF S/R level for a
+  // higher-conviction discount/premium entry vs the LTF (proximal-OB) entry.
   swingEntry?: number;
   swingStopLoss?: number;
   swingRiskPips?: number;
-  swingInvalidated?: boolean;
-  swingInvalidReason?: string;
+  // Split-entry smoothing: when both LTF and swing tiers exist, scale in 50/50
+  // across the two limits. UI shows the blended fill + blended risk so the
+  // trader knows the effective entry if both fill.
   splitEntry?: {
-    tier1: number;
-    tier2: number;
-    allocation: number;
+    tier1: number;       // LTF proximal entry (50% allocation)
+    tier2: number;       // Deeper swing entry (50% allocation)
+    allocation: number;  // 0.5 = even split
     blendedEntry: number;
     blendedRiskPips: number;
   };
@@ -196,17 +195,8 @@ interface Signal {
   entryModel?: "OTE" | "FVG" | "Breaker" | "Judas" | "OB";
   entryTrigger?: "MARKET_ON_CONFIRMATION" | "LIMIT";
   entryZone?: { top: number; bottom: number };
-  /** Thissdax POI ranking — only two types */
-  poiType?: "order_block" | "structural_origin";
-  poiLabel?: string;
-  poiScore?: number;
-  poiZone?: { top: number; bottom: number };
   // Multi-TF labels
-  signalStyle?: "swing" | "scalp" | "ict_sb";
-  /** Parallel model tag — user always sees this is ICT */
-  strategyModel?: "thissdax" | "ict_silver_bullet";
-  ictWindow?: "London" | "NY_AM" | "NY_PM";
-  ictWindowLabel?: string;
+  signalStyle?: "swing" | "scalp";
   structureTimeframe?: string;  // e.g. "4H" or "1H"
   setupGrade?: "A+" | "B";
   entryTimeframe?: string;      // e.g. "15M" | "5M"
@@ -230,7 +220,7 @@ interface DevelopingSetup {
     entry: number;
     stopLoss: number;
     takeProfit: number;   // TP1 (2R)
-    takeProfit2: number;  // TP2 (4R)
+    takeProfit2: number;  // TP2 (8R)
     riskPips: number;
     // Deeper swing entry (daily HTF zone) — optional. When present, this is
     // the higher-conviction fill at a discount/premium level vs the LTF entry.
@@ -978,345 +968,6 @@ function findLiquiditySweep(
 // SWING TRADING: 4H structure (resampled from 1h) + Daily HTF bias
 
 
-
-// ============================================================================
-// THISSDAX MODEL — Market structure (algo) + Liquidity
-// ----------------------------------------------------------------------------
-// 1) Valid swing = sweep of prior swing + BOS in trade direction
-// 2) Fib on full swing (HL→HH or LH→LL): below mid = discount (buys only),
-//    above mid = premium (sells only)
-// 3) Fib from BOS → swing origin: shallow side = liquidity (do NOT enter);
-//    deeper side = POI / entry zone
-// 4) Structural liquidity (last low before main low / last high before main high)
-//    is preferred for continuation
-// ============================================================================
-
-interface ThissdaxSwing {
-  direction: "BUY" | "SELL";
-  origin: number;       // protected HL (buy) or LH (sell)
-  extreme: number;      // HH (buy) or LL (sell)
-  bosLevel: number;
-  bosIndex: number;
-  equilibrium: number;  // 50% of origin→extreme
-  /** True when current price is in discount (buys) or premium (sells) */
-  inValueArea: boolean;
-  /** Shallow pullback from BOS — liquidity / no-entry */
-  liqTop: number;
-  liqBottom: number;
-  /** Deeper zone after liquidity — preferred entry */
-  entryTop: number;
-  entryBottom: number;
-  /** Structural liquidity reference (last swing before main origin) */
-  structuralLiquidity: number | null;
-  liquidityClass: "structural" | "inducement" | "transactional";
-}
-
-/**
- * Build a Thissdax-validated swing on the structure TF.
- * Requires: prior swing sweep + BOS, then maps Fib discount/premium + liquidity zone.
- */
-function buildThissdaxSwing(
-  candles: Candle[],
-  swings: Swing[],
-  direction: "BUY" | "SELL",
-  currentPrice: number,
-): ThissdaxSwing | null {
-  if (candles.length < 20 || swings.length < 4) return null;
-
-  const highs = swings.filter((s) => s.type === "high");
-  const lows = swings.filter((s) => s.type === "low");
-  if (highs.length < 2 || lows.length < 2) return null;
-
-  if (direction === "BUY") {
-    // Need a BOS up: close above a prior swing high after a low was swept
-    const recentHighs = highs.slice(-4);
-    const recentLows = lows.slice(-5);
-    let bosLevel: number | null = null;
-    let bosIndex: number | null = null;
-    let origin: number | null = null;
-    let originIdx = -1;
-
-    for (let hi = recentHighs.length - 1; hi >= 1; hi--) {
-      const level = recentHighs[hi - 1].price;
-      const after = recentHighs[hi - 1].index;
-      for (let j = after + 1; j < candles.length; j++) {
-        if (candles[j].close > level) {
-          // Find the low before this BOS (protected HL)
-          const priorLows = recentLows.filter((l) => l.index < j);
-          if (!priorLows.length) break;
-          const hl = priorLows[priorLows.length - 1];
-          // Sweep check: some low before HL was taken (wick or close below a prior low)
-          const older = priorLows.slice(0, -1);
-          let swept = older.length === 0;
-          for (const ol of older) {
-            for (let k = ol.index + 1; k <= hl.index; k++) {
-              if (candles[k].low < ol.price) {
-                swept = true;
-                break;
-              }
-            }
-            if (swept) break;
-          }
-          // Also accept equal-low / slight undercut of hl itself as transactional liquidity
-          if (!swept) {
-            for (let k = Math.max(0, hl.index - 8); k < hl.index; k++) {
-              if (candles[k].low <= hl.price * 1.0001 && candles[k].low >= hl.price * 0.998) {
-                swept = true;
-                break;
-              }
-            }
-          }
-          if (!swept) break;
-
-          bosLevel = level;
-          bosIndex = j;
-          origin = hl.price;
-          originIdx = hl.index;
-          break;
-        }
-      }
-      if (bosLevel != null) break;
-    }
-    if (bosLevel == null || origin == null || bosIndex == null) return null;
-
-    // Extreme = highest high after BOS (or the BOS candle high)
-    let extreme = bosLevel;
-    for (let j = bosIndex; j < candles.length; j++) {
-      if (candles[j].high > extreme) extreme = candles[j].high;
-    }
-    if (extreme <= origin) return null;
-
-    const equilibrium = origin + (extreme - origin) * 0.5;
-    const inValueArea = currentPrice <= equilibrium; // discount for buys
-
-    // Liquidity zone: from BOS level toward origin — shallow 0–50% of BOS→origin leg
-    // Entry zone: deeper 50–100% of that leg (toward origin / structural POI)
-    const leg = bosLevel - origin;
-    const midLeg = origin + leg * 0.5;
-    const liqTop = bosLevel;
-    const liqBottom = midLeg;
-    const entryTop = midLeg;
-    const entryBottom = origin;
-
-    // Structural liquidity: last low before the main origin low
-    const olderLows = lows.filter((l) => l.index < originIdx);
-    const structuralLiquidity = olderLows.length
-      ? olderLows[olderLows.length - 1].price
-      : null;
-
-    // Classify: if we swept a clear prior low → structural; equal lows → transactional; else inducement
-    let liquidityClass: ThissdaxSwing["liquidityClass"] = "structural";
-    if (structuralLiquidity != null) {
-      const dist = Math.abs(origin - structuralLiquidity) / Math.max(extreme - origin, 1e-9);
-      if (dist < 0.08) liquidityClass = "transactional";
-      else if (dist > 0.35) liquidityClass = "inducement";
-      else liquidityClass = "structural";
-    }
-
-    return {
-      direction,
-      origin,
-      extreme,
-      bosLevel,
-      bosIndex,
-      equilibrium,
-      inValueArea,
-      liqTop,
-      liqBottom,
-      entryTop,
-      entryBottom,
-      structuralLiquidity,
-      liquidityClass,
-    };
-  }
-
-  // SELL — mirror
-  {
-    const recentHighs = highs.slice(-5);
-    const recentLows = lows.slice(-4);
-    let bosLevel: number | null = null;
-    let bosIndex: number | null = null;
-    let origin: number | null = null;
-    let originIdx = -1;
-
-    for (let li = recentLows.length - 1; li >= 1; li--) {
-      const level = recentLows[li - 1].price;
-      const after = recentLows[li - 1].index;
-      for (let j = after + 1; j < candles.length; j++) {
-        if (candles[j].close < level) {
-          const priorHighs = recentHighs.filter((h) => h.index < j);
-          if (!priorHighs.length) break;
-          const lh = priorHighs[priorHighs.length - 1];
-          const older = priorHighs.slice(0, -1);
-          let swept = older.length === 0;
-          for (const oh of older) {
-            for (let k = oh.index + 1; k <= lh.index; k++) {
-              if (candles[k].high > oh.price) {
-                swept = true;
-                break;
-              }
-            }
-            if (swept) break;
-          }
-          if (!swept) {
-            for (let k = Math.max(0, lh.index - 8); k < lh.index; k++) {
-              if (candles[k].high >= lh.price * 0.9999 && candles[k].high <= lh.price * 1.002) {
-                swept = true;
-                break;
-              }
-            }
-          }
-          if (!swept) break;
-          bosLevel = level;
-          bosIndex = j;
-          origin = lh.price;
-          originIdx = lh.index;
-          break;
-        }
-      }
-      if (bosLevel != null) break;
-    }
-    if (bosLevel == null || origin == null || bosIndex == null) return null;
-
-    let extreme = bosLevel;
-    for (let j = bosIndex; j < candles.length; j++) {
-      if (candles[j].low < extreme) extreme = candles[j].low;
-    }
-    if (extreme >= origin) return null;
-
-    const equilibrium = extreme + (origin - extreme) * 0.5;
-    const inValueArea = currentPrice >= equilibrium; // premium for sells
-
-    const leg = origin - bosLevel;
-    const midLeg = bosLevel + leg * 0.5;
-    const liqBottom = bosLevel;
-    const liqTop = midLeg;
-    const entryBottom = midLeg;
-    const entryTop = origin;
-
-    const olderHighs = highs.filter((h) => h.index < originIdx);
-    const structuralLiquidity = olderHighs.length
-      ? olderHighs[olderHighs.length - 1].price
-      : null;
-
-    let liquidityClass: ThissdaxSwing["liquidityClass"] = "structural";
-    if (structuralLiquidity != null) {
-      const dist = Math.abs(origin - structuralLiquidity) / Math.max(origin - extreme, 1e-9);
-      if (dist < 0.08) liquidityClass = "transactional";
-      else if (dist > 0.35) liquidityClass = "inducement";
-      else liquidityClass = "structural";
-    }
-
-    return {
-      direction,
-      origin,
-      extreme,
-      bosLevel,
-      bosIndex,
-      equilibrium,
-      inValueArea,
-      liqTop,
-      liqBottom,
-      entryTop,
-      entryBottom,
-      structuralLiquidity,
-      liquidityClass,
-    };
-  }
-}
-
-
-function priceInZone(price: number, top: number, bottom: number): boolean {
-  const hi = Math.max(top, bottom);
-  const lo = Math.min(top, bottom);
-  return price <= hi && price >= lo;
-}
-
-/** Thissdax: only two POI types — Order Block vs Structural origin. Rank & pick one. */
-interface RankedPoi {
-  type: "order_block" | "structural_origin";
-  label: string;
-  score: number;
-  price: number;
-  zoneTop: number;
-  zoneBottom: number;
-  fresh: boolean;
-}
-
-function rankThissdaxPois(
-  direction: "BUY" | "SELL",
-  td: ThissdaxSwing,
-  ob: { top: number; bottom: number; index?: number } | null,
-  strongZonePrice: number,
-  candles: Candle[],
-  atrVal: number,
-): RankedPoi | null {
-  const candidates: RankedPoi[] = [];
-  const inDeep = (px: number) => priceInZone(px, td.entryTop, td.entryBottom);
-  const inValue = (px: number) =>
-    direction === "BUY" ? px <= td.equilibrium : px >= td.equilibrium;
-  const notInLiq = (px: number) => !priceInZone(px, td.liqTop, td.liqBottom);
-
-  // --- Type A: Order Block POI (last opposing candle before BOS impulse) ---
-  if (ob) {
-    const mid = (ob.top + ob.bottom) / 2;
-    let score = 40;
-    const fresh = ob.index != null ? isFreshOB(candles, ob as OrderBlock) : false;
-    if (fresh) score += 18;
-    if (inDeep(mid)) score += 22;
-    else if (priceInZone(mid, td.origin, td.extreme)) score += 8;
-    if (inValue(mid)) score += 12;
-    if (notInLiq(mid)) score += 10;
-    else score -= 25; // shallow liquidity grab — heavily penalize
-    if (td.liquidityClass === "structural") score += 6;
-    candidates.push({
-      type: "order_block",
-      label: fresh ? "Order Block (fresh)" : "Order Block",
-      score,
-      price: mid,
-      zoneTop: ob.top,
-      zoneBottom: ob.bottom,
-      fresh,
-    });
-  }
-
-  // --- Type B: Structural origin POI (protected HL/LH / structural liquidity) ---
-  {
-    const originPx = td.structuralLiquidity ?? td.origin;
-    let score = 45; // structural is Thissdax's preferred continuation POI
-    if (td.structuralLiquidity != null) score += 10;
-    if (inDeep(originPx)) score += 20;
-    if (inValue(originPx)) score += 12;
-    if (notInLiq(originPx)) score += 10;
-    else score -= 20;
-    if (td.liquidityClass === "structural") score += 12;
-    if (td.liquidityClass === "inducement") score -= 8;
-    // Daily strong zone confluence
-    if (Math.abs(originPx - strongZonePrice) <= atrVal * 0.6) score += 10;
-    candidates.push({
-      type: "structural_origin",
-      label: td.structuralLiquidity != null
-        ? "Structural origin (liquidity)"
-        : "Structural origin (protected swing)",
-      score,
-      price: originPx,
-      zoneTop: direction === "BUY" ? originPx + atrVal * 0.25 : originPx,
-      zoneBottom: direction === "BUY" ? originPx : originPx - atrVal * 0.25,
-      fresh: true,
-    });
-  }
-
-  // Prefer OB when it sits cleanly in deep zone AND is fresh with high score
-  candidates.sort((a, b) => b.score - a.score);
-  const best = candidates[0];
-  if (!best || best.score < 50) return null;
-  // Final: must not arm inside liquidity zone
-  if (!notInLiq(best.price) && !inDeep(best.price)) return null;
-  return best;
-}
-
-
-
 // ---- Price sanity (prevents GER40@80k-style glitches) ----
 function priceBand(pair: string): { min: number; max: number } | null {
   if (isGold(pair)) return { min: 500, max: 10000 };
@@ -1325,12 +976,12 @@ function priceBand(pair: string): { min: number; max: number } | null {
     if (pair.startsWith("ETH")) return { min: 50, max: 50000 };
     return { min: 0.01, max: 500000 };
   }
-  if (pair === "GER40") return { min: 5000, max: 50000 };
-  if (pair === "US30") return { min: 15000, max: 100000 };
-  if (pair === "NAS100") return { min: 5000, max: 80000 };
-  if (pair === "SPX500") return { min: 1500, max: 20000 };
-  if (pair === "UK100") return { min: 4000, max: 25000 };
-  if (pair === "JPN225") return { min: 10000, max: 120000 }; // Nikkei traded ~63k+ in 2026
+  if (pair === "GER40") return { min: 5000, max: 30000 };
+  if (pair === "US30") return { min: 15000, max: 60000 };
+  if (pair === "NAS100") return { min: 5000, max: 40000 };
+  if (pair === "SPX500") return { min: 1500, max: 10000 };
+  if (pair === "UK100") return { min: 4000, max: 15000 };
+  if (pair === "JPN225") return { min: 10000, max: 60000 };
   // FX majors / crosses
   if (pair.includes("JPY")) return { min: 50, max: 300 };
   if (pair.includes("/")) return { min: 0.2, max: 5 };
@@ -1374,7 +1025,7 @@ const TWELVE_SYMBOL: Record<string, string> = {
   "GER40": "DAX",
   "NAS100": "IXIC",
   "UK100": "UKX",
-  "JPN225": "N225",  // Nikkei 225 on Twelve Data (JPX)
+  "JPN225": "NI225",
 };
 
 function isTwelveEligible(pair: string): boolean {
@@ -1582,13 +1233,7 @@ async function fetchYahooCandles(
   }
   const cleaned = filterPlausibleCandles(pair, raw);
   if (cleaned.length < 10) {
-    const sample = raw.slice(-3).map((c) => c.close);
-    const band = priceBand(pair);
-    throw new Error(
-      `Yahoo prices out of band for ${pair} (bad symbol/data)` +
-        (sample.length ? `; last closes=${sample.join(",")}` : "") +
-        (band ? `; allowed ${band.min}-${band.max}` : ""),
-    );
+    throw new Error(`Yahoo prices out of band for ${pair} (bad symbol/data)`);
   }
   return interval === "4h" ? resampleTo4H(cleaned) : cleaned;
   }
@@ -2069,35 +1714,16 @@ async function analyzePairFromCandles(
           }
         }
 
-        // Prefer swing levels as the plan the user should trade (2R / 4R)
-        if (swingEntry != null && swingStopLoss != null && swingRiskPips != null) {
-          const sRisk = Math.abs(swingEntry - swingStopLoss);
-          const sTp1 = dir === "BUY" ? swingEntry + sRisk * 2 : swingEntry - sRisk * 2;
-          const sTp2 = dir === "BUY" ? swingEntry + sRisk * 4 : swingEntry - sRisk * 4;
-          plan = {
-            entry: swingEntry,
-            stopLoss: swingStopLoss,
-            takeProfit: Number(sTp1.toFixed(decimals)),
-            takeProfit2: Number(sTp2.toFixed(decimals)),
-            riskPips: swingRiskPips,
-            swingEntry,
-            swingStopLoss,
-            swingRiskPips,
-            // keep LTF on triggers for context
-          };
-          triggers.push(`LTF context @ ${Number(pEntry.toFixed(decimals))} (not the live order)`);
-          triggers.push(`★ SWING plan @ ${swingEntry} · TP1 2R · TP2 4R`);
-        } else {
-          // No swing zone yet — show LTF as context only, mark incomplete
-          plan = {
-            entry: Number(pEntry.toFixed(decimals)),
-            stopLoss: Number(pSL.toFixed(decimals)),
-            takeProfit: Number((dir === "BUY" ? pEntry + risk * 2 : pEntry - risk * 2).toFixed(decimals)),
-            takeProfit2: Number((dir === "BUY" ? pEntry + risk * 4 : pEntry - risk * 4).toFixed(decimals)),
-            riskPips: Math.round(riskPips),
-          };
-          triggers.push("◌ Swing zone not ready — LTF levels are context only");
-        }
+        plan = {
+          entry: Number(pEntry.toFixed(decimals)),
+          stopLoss: Number(pSL.toFixed(decimals)),
+          takeProfit: Number(tp1.toFixed(decimals)),
+          takeProfit2: Number(tp2.toFixed(decimals)),
+          riskPips: Math.round(riskPips),
+          ...(swingEntry != null
+            ? { swingEntry, swingStopLoss, swingRiskPips }
+            : {}),
+        };
       }
     }
 
@@ -2335,79 +1961,32 @@ async function analyzePairFromCandles(
 
   const p = pip(pair);
 
-  // ---- PROFESSIONAL ENTRY MODEL (ranked) ----
-  // OB remains the structural anchor. Prefer a cleaner fill inside/near the OB:
-  //   1) OTE (70.5% of the impulse leg that created the OB)
-  //   2) Unmitigated FVG midpoint inside or just beyond the OB
-  //   3) Fallback: OB mean (50%) or proximal edge if mean already traded through
-  // Pure proximal OB is the most common retail trap — ranked models avoid it.
+  // ---- ORDER BLOCK ENTRY (only model used) ----
+  // Professional OB execution: fill at the block's mean threshold (50% of the
+  // OB body range) rather than the proximal edge — better average price, still
+  // inside the institutional zone. If price has already traded past the mean,
+  // fall back to the proximal edge so the entry remains reachable.
   const obZone: EntryZone = { top: ob.top, bottom: ob.bottom };
   const obProximal = direction === "BUY" ? ob.top : ob.bottom;
   const obMean = (ob.top + ob.bottom) / 2;
   const meanReachable = direction === "BUY" ? currentPrice > obMean : currentPrice < obMean;
-  const obFallbackPrice = meanReachable ? obMean : obProximal;
+  const entry = Number((meanReachable ? obMean : obProximal).toFixed(priceDecimals(pair)));
+  const entryZone: EntryZone = obZone;
+  const entryModel: "OTE" | "FVG" | "Breaker" | "Judas" | "OB" = "OB";
 
-  const oteCand = computeOTE(ltfTail, swings, direction);
-  const fvgCand = fvgEntry(fvg, direction, swings);
-  // Only accept OTE/FVG when they sit inside the OB or within 0.35×ATR beyond it
-  // (still in the institutional zone, not chasing).
-  const nearOb = (price: number) => {
-    const inOb = price >= ob.bottom && price <= ob.top;
-    const dist = direction === "BUY"
-      ? Math.max(0, ob.bottom - price)
-      : Math.max(0, price - ob.top);
-    return inOb || dist <= atrVal * 0.35;
-  };
-  const ranked: (ProEntry | null)[] = [];
-  if (oteCand && nearOb(oteCand.price)) ranked.push(oteCand);
-  if (fvgCand && nearOb(fvgCand.price)) ranked.push(fvgCand);
-  const pro = pickBestProEntry(ranked, currentPrice, atrVal);
 
-  let entry = Number((pro ? pro.price : obFallbackPrice).toFixed(priceDecimals(pair)));
-  let entryZone: EntryZone = pro ? pro.zone : obZone;
-  let entryModel: "OTE" | "FVG" | "Breaker" | "Judas" | "OB" = pro ? pro.model : "OB";
-  // Keep zone at least as wide as the OB so confirmation candle logic still works
-  if (pro) {
-    entryZone = {
-      top: Math.max(pro.zone.top, ob.top),
-      bottom: Math.min(pro.zone.bottom, ob.bottom),
-    };
-  }
-
-  // GATE 10d: THISSDAX Fib premium/discount + liquidity no-entry zone
-  // Build validated swing (sweep + BOS) on structure TF, map Fib equilibrium
-  // and the BOS→origin liquidity band (shallow = avoid, deep = enter).
-  const tdSwing = buildThissdaxSwing(ltfTail, swings, direction, currentPrice);
-  if (!tdSwing) {
-    return {
-      signal: null,
-      developing: tagBlocked(buildDeveloping(), "GATE 10d (no valid sweep+BOS swing)"),
-    };
-  }
-  if (!tdSwing.inValueArea) {
-    return {
-      signal: null,
-      developing: tagBlocked(
-        buildDeveloping(),
-        direction === "BUY"
-          ? "GATE 10d (price in premium — wait for discount)"
-          : "GATE 10d (price in discount — wait for premium)",
-      ),
-    };
-  }
-  // Hard reject if entry is still in the shallow liquidity grab zone
-  const entryInLiq = priceInZone(entry, tdSwing.liqTop, tdSwing.liqBottom);
-  if (entryInLiq) {
-    qualityPenalty += 12;
-    // Prefer deeper POI: snap informational entry toward entry zone mid
-    const deeperMid = (tdSwing.entryTop + tdSwing.entryBottom) / 2;
-    if (direction === "BUY" ? deeperMid < entry : deeperMid > entry) {
-      // keep original for context; swing path will use Daily/structural levels
-    }
-  }
-  // Prefer structural liquidity class for continuation book
-  if (tdSwing.liquidityClass === "inducement") qualityPenalty += 6;
-  if (tdSwing.liquidityClass === "transactional") qualityPenalty += 3;
+  // GATE 10d: DISCOUNT/PREMIUM filter (SMC OTE range).
+  // Entry must sit in the discount half (BUY) / premium half (SELL) of the
+  // recent 60-bar dealing range — never enter at parity or worse.
+  const rangeWindow = ltfTail.slice(-60);
+  const rangeHigh = Math.max(...rangeWindow.map((c) => c.high));
+  const rangeLow = Math.min(...rangeWindow.map((c) => c.low));
+  const rangeMid = (rangeHigh + rangeLow) / 2;
+  const rangeSize = Math.max(rangeHigh - rangeLow, 1e-9);
+  const offMid = direction === "BUY" ? (entry - rangeMid) / rangeSize : (rangeMid - entry) / rangeSize;
+  // Deep in the wrong half is a hard reject; marginally past parity is penalised.
+  if (offMid > 0.12) return { signal: null, developing: tagBlocked(buildDeveloping(), "GATE 10d") };
+  if (offMid > 0) qualityPenalty += 8;
 
   // GATE 10d-2: 1H CONFIRMATION CANDLE — the pro-entry trigger.
   // We no longer fire on a passive limit; require a closed 1H bar inside the
@@ -2466,112 +2045,65 @@ async function analyzePairFromCandles(
     stopLoss = direction === "BUY" ? entry - maxRisk : entry + maxRisk;
   }
 
-  // ---- SWING-FIRST RISK & TARGETS (pro swing book) ----
-  // LTF entry/stop kept for UI context only. Live order uses Daily swing zone.
-  const ltfEntryPrice = entry;
-  const ltfStopPrice = stopLoss;
-  const ltfRisk = Math.abs(ltfEntryPrice - ltfStopPrice);
-  if (ltfRisk < minRiskFor(pair, atrVal)) {
-    return { signal: null, developing: tagBlocked(buildDeveloping(), "GATE 10d-2") };
-  }
+  const risk = Math.abs(entry - stopLoss);
+  if (risk < minRiskFor(pair, atrVal)) return { signal: null, developing: tagBlocked(buildDeveloping(), "GATE 10d-2") };
 
-  // Thissdax POI ranking — arm limit ONLY at ranked POI (OB or structural origin)
-  const rankedPoi = rankThissdaxPois(
-    direction,
-    tdSwing,
-    ob,
-    strongZone.price,
-    ltfTail,
-    atrVal,
+  // ---- TAKE PROFITS: ride from support to the top ----
+  // TP1 = first realistic obstacle (nearest opposing 4H swing OR opposing
+  //   HTF zone, whichever comes first). 1.5R floor, 4R cap → bankable partial.
+  // TP2 = the STRONGEST opposing HTF zone within reach (the "top of the
+  //   move"). 3R floor, 10R cap → captures the full ride when structure allows.
+  const minTP1 = risk * 1.5;
+  // TP1 is the bankable partial; TP2 is a runner. Cap runner tighter on crypto
+  // so BTC/ETH don't show inflated 8–10R "risk_reward" on every setup.
+  const maxTP1 = risk * 3;
+  const minTP2 = risk * 2.5;
+  const maxTP2 = isCrypto(pair) ? risk * 5 : risk * 6;
+
+  const opposingType: SRZone["type"] = direction === "BUY" ? "resistance" : "support";
+  // All opposing HTF zones beyond entry, sorted nearest → farthest
+  const opposingZones = htfZones
+    .filter((z) => z.type === opposingType)
+    .filter((z) => direction === "BUY" ? z.price > entry : z.price < entry)
+    .sort((a, b) =>
+      direction === "BUY" ? a.price - b.price : b.price - a.price,
+    );
+
+  const swingTP = nearestOpposingSwing(swings, direction, entry, minTP1);
+  // Nearest opposing HTF zone — first obstacle on the way up
+  const nearestZone = opposingZones[0]?.price ?? null;
+  // Strongest opposing HTF zone within max reach — the "top" target
+  const reachLimit = direction === "BUY" ? entry + maxTP2 : entry - maxTP2;
+  const inReach = opposingZones.filter((z) =>
+    direction === "BUY" ? z.price <= reachLimit : z.price >= reachLimit,
   );
-  if (!rankedPoi) {
-    return {
-      signal: null,
-      developing: tagBlocked(buildDeveloping(), "POI_NONE (no valid OB or structural POI)"),
-    };
-  }
+  const strongestZone = inReach.length > 0
+    ? inReach.reduce((best, z) => (z.touches > best.touches ? z : best)).price
+    : opposingZones[opposingZones.length - 1]?.price ?? null;
 
-  const tdEntryMid = (tdSwing.entryTop + tdSwing.entryBottom) / 2;
-  let swingCandidate = rankedPoi.price;
-  // Keep POI inside deep zone when possible
-  if (priceInZone(swingCandidate, tdSwing.liqTop, tdSwing.liqBottom)) {
-    swingCandidate = tdEntryMid;
-  }
-
-  const swingSlBuffer = Math.max(atrVal * 1.15, pip(pair) * 10);
-  // Stop beyond protected origin (Thissdax protected low/high)
-  let swingEntryPx = swingCandidate;
-  let swingStopPx =
+  const clamp = (target: number, lo: number, hi: number) =>
     direction === "BUY"
-      ? Math.min(tdSwing.origin, swingCandidate) - swingSlBuffer
-      : Math.max(tdSwing.origin, swingCandidate) + swingSlBuffer;
-  let swingRiskPx = Math.abs(swingEntryPx - swingStopPx);
+      ? Math.min(Math.max(target, entry + lo), entry + hi)
+      : Math.max(Math.min(target, entry - lo), entry - hi);
 
-  if (priceInZone(swingEntryPx, tdSwing.liqTop, tdSwing.liqBottom)) {
-    swingEntryPx = tdEntryMid;
-    swingStopPx =
-      direction === "BUY"
-        ? Math.min(tdSwing.origin, swingEntryPx) - swingSlBuffer
-        : Math.max(tdSwing.origin, swingEntryPx) + swingSlBuffer;
-    swingRiskPx = Math.abs(swingEntryPx - swingStopPx);
-  }
+  // TP1: first obstacle (whichever is nearer — swing or zone)
+  const tp1Candidates = [swingTP, nearestZone].filter((v): v is number => v != null);
+  const tp1Raw = tp1Candidates.length > 0
+    ? (direction === "BUY" ? Math.min(...tp1Candidates) : Math.max(...tp1Candidates))
+    : null;
+  const takeProfit = tp1Raw != null
+    ? clamp(tp1Raw, minTP1, maxTP1)
+    : direction === "BUY" ? entry + risk * 2 : entry - risk * 2;
 
-  const deeperOk =
-    direction === "BUY"
-      ? swingEntryPx <= ltfEntryPrice + atrVal * 0.35
-      : swingEntryPx >= ltfEntryPrice - atrVal * 0.35;
-  if (!deeperOk || swingRiskPx <= 0) {
-    return {
-      signal: null,
-      developing: tagBlocked(buildDeveloping(), "SWING_ZONE_MISSING"),
-    };
-  }
+  // TP2 must be beyond TP1; aim for the strongest zone (the top), default 6R
+  const tp1Distance = Math.abs(takeProfit - entry);
+  const minTP2Final = Math.max(minTP2, tp1Distance + risk * 0.5);
+  const takeProfit2 = strongestZone != null
+    ? clamp(strongestZone, minTP2Final, maxTP2)
+    : direction === "BUY" ? entry + risk * (isCrypto(pair) ? 4 : 5) : entry - risk * (isCrypto(pair) ? 4 : 5);
 
-  const maxSwingRisk = atrVal * 3.5;
-  if (swingRiskPx > maxSwingRisk) {
-    swingStopPx = direction === "BUY" ? swingEntryPx - maxSwingRisk : swingEntryPx + maxSwingRisk;
-    swingRiskPx = Math.abs(swingEntryPx - swingStopPx);
-  }
-
-  // Invalidate if price already closed through swing stop (Daily thesis broken)
-  {
-    const lastClose = ltfTail[ltfTail.length - 1]?.close ?? currentPrice;
-    const throughStop =
-      direction === "BUY" ? lastClose < swingStopPx : lastClose > swingStopPx;
-    if (throughStop) {
-      const dev = buildDeveloping();
-      if (dev) {
-        dev.triggers = [
-          "✗ SWING INVALIDATED — price closed through swing stop (Daily zone broken)",
-          ...(dev.triggers ?? []),
-        ];
-        (dev as DevelopingSetup & { blockedBy?: string }).blockedBy = "SWING_INVALIDATED";
-      }
-      return { signal: null, developing: dev };
-    }
-  }
-
-  // No counter-bias primary swing book — Daily must agree (or Neutral)
-  if (
-    htf_bias !== "Neutral" &&
-    htf_bias !== (direction === "BUY" ? "Bullish" : "Bearish")
-  ) {
-    return {
-      signal: null,
-      developing: tagBlocked(buildDeveloping(), "SWING_COUNTER_BIAS"),
-    };
-  }
-
-  // Promote swing to primary executable levels
-  entry = swingEntryPx;
-  stopLoss = swingStopPx;
-  const risk = swingRiskPx;
-
-  // Fixed pro targets from swing risk
-  const takeProfit = direction === "BUY" ? entry + risk * 2 : entry - risk * 2;
-  const takeProfit2 = direction === "BUY" ? entry + risk * 4 : entry - risk * 4;
-  const rr1 = 2;
-  const rr2 = 4;
+  const rr1 = Number((Math.abs(takeProfit - entry) / risk).toFixed(2));
+  const rr2 = Number((Math.abs(takeProfit2 - entry) / risk).toFixed(2));
 
   // ---------- CONFIDENCE BREAKDOWN ----------
   // Each factor records: label, point value, hit/miss. The UI shows this
@@ -2681,11 +2213,45 @@ async function analyzePairFromCandles(
   if (confidence < 72) return { signal: null, developing: tagBlocked(buildDeveloping(), "GATE 11") };
 
   const decimals = priceDecimals(pair);
-  const swingEntry = Number(entry.toFixed(decimals));
-  const swingStopLoss = Number(stopLoss.toFixed(decimals));
-  const swingRiskPips = Math.round(toPips(pair, Math.abs(entry - stopLoss)));
-  const ltfEntry = Number(ltfEntryPrice.toFixed(decimals));
-  const ltfStopLoss = Number(ltfStopPrice.toFixed(decimals));
+
+  // ---- Deeper SWING entry tier ----
+  // Mirror the developing-setup logic: the daily HTF zone (strongZone) is the
+  // true discount/premium fill. Only attach when it's meaningfully deeper than
+  // the LTF entry (>= 0.5×ATR away in the trade direction).
+  let swingEntry: number | undefined;
+  let swingStopLoss: number | undefined;
+  let swingRiskPips: number | undefined;
+  {
+    const candidate = strongZone.price;
+    const inDirection = direction === "BUY" ? candidate < entry : candidate > entry;
+    const gap = Math.abs(candidate - entry);
+    if (inDirection && gap >= atrVal * 0.5) {
+      const slBuffer = Math.max(atrVal * 1.2, p * 8);
+      const sSL = direction === "BUY" ? candidate - slBuffer : candidate + slBuffer;
+      const sRisk = Math.abs(candidate - sSL);
+      if (sRisk > 0) {
+        swingEntry = Number(candidate.toFixed(decimals));
+        swingStopLoss = Number(sSL.toFixed(decimals));
+        swingRiskPips = Math.round(toPips(pair, sRisk));
+      }
+    }
+  }
+
+  // ---- Split-entry smoothing (50/50 LTF + swing) ----
+  let splitEntry:
+    | { tier1: number; tier2: number; allocation: number; blendedEntry: number; blendedRiskPips: number }
+    | undefined;
+  if (swingEntry != null && swingStopLoss != null) {
+    const blended = (entry + swingEntry) / 2;
+    const blendedRisk = Math.abs(blended - swingStopLoss);
+    splitEntry = {
+      tier1: Number(entry.toFixed(decimals)),
+      tier2: swingEntry,
+      allocation: 0.5,
+      blendedEntry: Number(blended.toFixed(decimals)),
+      blendedRiskPips: Math.round(toPips(pair, blendedRisk)),
+    };
+  }
 
   // ---- Entry-TF trigger (15M forex / 5M indices+gold) ----
   // Market direction (Daily+4H) is confirmed above. Now require the entry TF
@@ -2722,46 +2288,29 @@ async function analyzePairFromCandles(
       stopLoss: Number(stopLoss.toFixed(decimals)),
       takeProfit: Number(takeProfit.toFixed(decimals)),
       takeProfit2: Number(takeProfit2.toFixed(decimals)),
-      riskReward: 2,
+      riskReward: rr1,  // TP1 R — actual book PnL uses close_price
       confidence,
       structure: structure.structure,
-      confluences: [
-        `★ SWING ENTRY @ ${swingEntry} · SL ${swingStopLoss} · TP1 2R · TP2 4R`,
-        `POI: ${rankedPoi.label} (score ${rankedPoi.score}) · arm limit here only`,
-        `Thissdax: sweep+BOS · Fib ${direction === "BUY" ? "discount" : "premium"} · ${tdSwing.liquidityClass} liquidity`,
-        `Avoid liquidity zone ${Number(Math.min(tdSwing.liqBottom, tdSwing.liqTop).toFixed(decimals))}–${Number(Math.max(tdSwing.liqBottom, tdSwing.liqTop).toFixed(decimals))} · enter deeper`,
-        `LTF context only @ ${ltfEntry} (not the live order)`,
-        ...confluences,
-      ],
+      confluences,
       confidenceBreakdown: breakdown,
       currentPrice: Number(currentPrice.toFixed(decimals)),
       timestamp: new Date(lastCandle.time * 1000).toISOString(),
       htf_bias,
-      ltfEntry,
-      ltfStopLoss,
-      swingEntry,
-      swingStopLoss,
-      swingRiskPips,
-      swingInvalidated: false,
+      ...(swingEntry != null ? { swingEntry, swingStopLoss, swingRiskPips } : {}),
+      ...(splitEntry ? { splitEntry } : {}),
       ltfConfirmed: confidence >= 90 ? true : ltfConfirmed,
       awaitingLtfConfirmation: confidence >= 90 ? false : !ltfConfirmed,
-      autoTrigger: false,
-      entryModel: rankedPoi.type === "order_block" ? "OB" : entryModel,
-      entryTrigger: "LIMIT",
+      autoTrigger: confidence >= 90,
+      entryModel,
+      entryTrigger: "MARKET_ON_CONFIRMATION",
       entryZone: {
-        top: Number(rankedPoi.zoneTop.toFixed(decimals)),
-        bottom: Number(rankedPoi.zoneBottom.toFixed(decimals)),
+        top: Number(entryZone.top.toFixed(decimals)),
+        bottom: Number(entryZone.bottom.toFixed(decimals)),
       },
-      poiType: rankedPoi.type,
-      poiLabel: rankedPoi.label,
-      poiScore: rankedPoi.score,
-      poiZone: {
-        top: Number(rankedPoi.zoneTop.toFixed(decimals)),
-        bottom: Number(rankedPoi.zoneBottom.toFixed(decimals)),
-      },
-      signalStyle: "swing",
+      signalStyle,
       structureTimeframe: structureTfLabel,
-      entryTimeframe: "D1 swing",
+      entryTimeframe: entryTfName,
+      // B: A+ = HTF aligned + high confidence + session/kill-zone quality
       setupGrade: (marketDirectionAligned && confidence >= 78 && (kz.active || inTradingSession(pair, new Date(lastCandle.time * 1000)).ok))
         ? "A+"
         : "B",
@@ -2771,220 +2320,7 @@ async function analyzePairFromCandles(
 }
 
 
-// ---------- ICT SILVER BULLET (parallel model — always labeled ICT) ----------
-// Windows (New York local): 03:00–04:00 · 10:00–11:00 · 14:00–15:00
-// Pattern: liquidity sweep → displacement → FVG inside the hour → limit into FVG
-
-function getNyParts(unixSec: number): { hour: number; minute: number } {
-  const fmt = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-  const parts = fmt.formatToParts(new Date(unixSec * 1000));
-  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? "0");
-  const minute = Number(parts.find((p) => p.type === "minute")?.value ?? "0");
-  return { hour, minute };
-}
-
-function silverBulletWindow(unixSec: number): {
-  active: boolean;
-  name: "London" | "NY_AM" | "NY_PM" | null;
-  label: string;
-} {
-  const { hour } = getNyParts(unixSec);
-  if (hour === 3) return { active: true, name: "London", label: "London SB 03–04 NY" };
-  if (hour === 10) return { active: true, name: "NY_AM", label: "NY AM SB 10–11 NY" };
-  if (hour === 14) return { active: true, name: "NY_PM", label: "NY PM SB 14–15 NY" };
-  return { active: false, name: null, label: "" };
-}
-
-function findFvgInWindow(
-  candles: Candle[],
-  direction: "Bullish" | "Bearish",
-  windowStart: number,
-  windowEnd: number,
-): FVG | null {
-  for (let i = candles.length - 1; i >= 2; i--) {
-    const mid = candles[i - 1];
-    if (mid.time < windowStart || mid.time > windowEnd) continue;
-    const c1 = candles[i - 2];
-    const c3 = candles[i];
-    if (direction === "Bullish" && c3.low > c1.high) {
-      return { index: i - 1, top: c3.low, bottom: c1.high, type: "bullish" };
-    }
-    if (direction === "Bearish" && c3.high < c1.low) {
-      return { index: i - 1, top: c1.low, bottom: c3.high, type: "bearish" };
-    }
-  }
-  return null;
-}
-
-function findSweepInWindow(
-  candles: Candle[],
-  direction: "Bullish" | "Bearish",
-  windowStart: number,
-): { price: number; index: number } | null {
-  // Look at recent swings before/at window for a stop-run
-  const swings = findSwings(candles, 2);
-  const prior = candles.filter((c) => c.time < windowStart).slice(-40);
-  if (prior.length < 10) return null;
-  if (direction === "Bullish") {
-    const lows = swings.filter((s) => s.type === "low" && s.index < candles.length - 3);
-    for (let i = lows.length - 1; i >= Math.max(0, lows.length - 4); i--) {
-      const lvl = lows[i].price;
-      for (let j = Math.max(lows[i].index + 1, candles.length - 25); j < candles.length; j++) {
-        if (candles[j].time < windowStart - 3600) continue;
-        if (candles[j].low < lvl && candles[j].close > lvl) {
-          return { price: candles[j].low, index: j };
-        }
-      }
-    }
-  } else {
-    const highs = swings.filter((s) => s.type === "high" && s.index < candles.length - 3);
-    for (let i = highs.length - 1; i >= Math.max(0, highs.length - 4); i--) {
-      const lvl = highs[i].price;
-      for (let j = Math.max(highs[i].index + 1, candles.length - 25); j < candles.length; j++) {
-        if (candles[j].time < windowStart - 3600) continue;
-        if (candles[j].high > lvl && candles[j].close < lvl) {
-          return { price: candles[j].high, index: j };
-        }
-      }
-    }
-  }
-  return null;
-}
-
-async function analyzeSilverBullet(
-  pair: string,
-  entryCandles: Candle[],
-  daily: Candle[],
-): Promise<Signal | null> {
-  if (entryCandles.length < 40) return null;
-  const last = entryCandles[entryCandles.length - 1];
-  const now = last.time;
-  const win = silverBulletWindow(now);
-  // Also allow if we are still in the same calendar hour that just printed the FVG
-  // (scan may lag a few minutes after the hour)
-  let activeWin = win;
-  if (!activeWin.active) {
-    // check last 12 bars for a bar that was inside a SB hour
-    for (let i = entryCandles.length - 1; i >= Math.max(0, entryCandles.length - 15); i--) {
-      const w = silverBulletWindow(entryCandles[i].time);
-      if (w.active) {
-        activeWin = w;
-        break;
-      }
-    }
-  }
-  if (!activeWin.active || !activeWin.name) return null;
-
-  // Window bounds for the active SB hour (approx using last in-window bar)
-  let windowStart = now;
-  let windowEnd = now;
-  for (const c of entryCandles.slice(-30)) {
-    const w = silverBulletWindow(c.time);
-    if (w.name === activeWin.name) {
-      windowStart = Math.min(windowStart, c.time);
-      windowEnd = Math.max(windowEnd, c.time + 300);
-    }
-  }
-  // Expand to full hour if thin
-  windowStart = windowStart - (windowStart % 3600);
-  windowEnd = windowStart + 3600;
-
-  // HTF bias from daily structure (soft — SB is still tradeable for testing)
-  const dSwings = findSwings(daily.slice(-60), 2);
-  const dStruct = analyzeStructure(daily.slice(-60), dSwings);
-  const bias = dStruct.trend;
-
-  // Prefer FVG with daily bias; if neutral, try both
-  const dirs: Array<"Bullish" | "Bearish"> =
-    bias === "Bullish" ? ["Bullish"] : bias === "Bearish" ? ["Bearish"] : ["Bullish", "Bearish"];
-
-  for (const dir of dirs) {
-    const fvg = findFvgInWindow(entryCandles, dir, windowStart, windowEnd);
-    if (!fvg) continue;
-    const sweep = findSweepInWindow(entryCandles, dir, windowStart);
-    // Soft: allow without perfect sweep for user testing, but tag confidence lower
-    const direction: "BUY" | "SELL" = dir === "Bullish" ? "BUY" : "SELL";
-    const entry = (fvg.top + fvg.bottom) / 2;
-    const atrVal = atr(entryCandles, 14) || Math.abs(fvg.top - fvg.bottom) * 2;
-    let stopLoss =
-      direction === "BUY"
-        ? Math.min(fvg.bottom, sweep?.price ?? fvg.bottom) - atrVal * 0.15
-        : Math.max(fvg.top, sweep?.price ?? fvg.top) + atrVal * 0.15;
-    let risk = Math.abs(entry - stopLoss);
-    if (risk < atrVal * 0.2) {
-      stopLoss = direction === "BUY" ? entry - atrVal * 0.5 : entry + atrVal * 0.5;
-      risk = Math.abs(entry - stopLoss);
-    }
-    if (risk <= 0) continue;
-    const takeProfit = direction === "BUY" ? entry + risk * 2 : entry - risk * 2;
-    const takeProfit2 = direction === "BUY" ? entry + risk * 3 : entry - risk * 3;
-    const decimals = priceDecimals(pair);
-    let confidence = 70;
-    if (sweep) confidence += 10;
-    if (bias === dir) confidence += 8;
-    if (activeWin.name === "NY_AM") confidence += 4;
-    confidence = Math.min(92, confidence);
-
-    const confluences = [
-      "⚡ ICT SILVER BULLET — parallel model (not Thissdax swing)",
-      `Window: ${activeWin.label}`,
-      sweep
-        ? `✓ Liquidity sweep @ ${sweep.price.toFixed(decimals)}`
-        : "◌ Sweep soft — FVG in window only (test mode)",
-      `✓ ${fvg.type} FVG entry zone ${fvg.bottom.toFixed(decimals)}–${fvg.top.toFixed(decimals)}`,
-      `HTF bias: ${bias}`,
-      "Arm limit at FVG mid · stop beyond sweep · target opposite liquidity",
-      "Always tradeable for strategy testing — log results",
-    ];
-
-    return {
-      pair,
-      direction,
-      entry: Number(entry.toFixed(decimals)),
-      stopLoss: Number(stopLoss.toFixed(decimals)),
-      takeProfit: Number(takeProfit.toFixed(decimals)),
-      takeProfit2: Number(takeProfit2.toFixed(decimals)),
-      riskReward: 2,
-      confidence,
-      structure: "BOS",
-      confluences,
-      confidenceBreakdown: [
-        { label: "ICT SB window", points: 25, hit: true },
-        { label: "FVG in window", points: 25, hit: true },
-        { label: "Liquidity sweep", points: 15, hit: !!sweep },
-        { label: "Daily bias aligned", points: 15, hit: bias === dir },
-      ],
-      currentPrice: Number(last.close.toFixed(decimals)),
-      timestamp: new Date().toISOString(),
-      htf_bias: bias === "Neutral" ? "Neutral" : bias,
-      entryModel: "FVG",
-      entryTrigger: "LIMIT",
-      entryZone: {
-        top: Number(fvg.top.toFixed(decimals)),
-        bottom: Number(fvg.bottom.toFixed(decimals)),
-      },
-      signalStyle: "ict_sb",
-      strategyModel: "ict_silver_bullet",
-      ictWindow: activeWin.name,
-      ictWindowLabel: activeWin.label,
-      structureTimeframe: "15M/5M",
-      entryTimeframe: "5M",
-      setupGrade: confidence >= 80 ? "A+" : "B",
-      autoTrigger: false,
-      poiType: undefined,
-      poiLabel: `ICT FVG · ${activeWin.label}`,
-    };
-  }
-  return null;
-}
-
 // ---------- GOLD SCALP: 1H trend + 5M BOS entry ----------
-
 // Separate from the swing path. Only runs for XAU/USD.
 async function analyzeGoldScalp(
   pair: string,
@@ -3123,10 +2459,10 @@ async function analyzeGoldScalp(
 }
 
 // Resolve open trades using two-stage logic + peak R (MFE) accounting:
-// 1. Hit TP1 → mark tp1_hit=true, move SL to soft buffer (−0.05R), NOT exact entry.
-// 2. At +2R → lock +1R (protection). At +3R → trail to +1.5R.
-// 3. True BE / +0.5R upgrade occurs when protection is active (structure-style lock).
-// 4. Book close uses peak favorable price when it exceeds exit (e.g. +5R then BE → +5R).
+// 1. If TP1 not yet hit: hit TP1 → mark tp1_hit=true, move SL to break-even (entry).
+//    Hit SL first → loss.
+// 2. If TP1 already hit: hit TP2 → win at TP2. Hit BE-stop → win.
+// 3. Book close uses peak favorable price when it exceeds exit (e.g. +5R then BE → +5R).
 async function resolveOpenTrades(
   pair: string,
   candles: Candle[],
@@ -3171,28 +2507,6 @@ async function resolveOpenTrades(
     // Best price seen in the trade direction (for MFE / peak R)
     let peakPrice = entryPrice;
 
-    // LIMIT FILL: trade only becomes active when price trades through the limit entry.
-    // Until then the order is armed — no SL/TP resolution (avoids false book results).
-    let fillIdx = -1;
-    for (let i = 0; i < future.length; i++) {
-      const c = future[i];
-      if (isBuy && c.low <= entryPrice) {
-        fillIdx = i;
-        break;
-      }
-      if (!isBuy && c.high >= entryPrice) {
-        fillIdx = i;
-        break;
-      }
-    }
-    if (fillIdx < 0) {
-      // Still waiting for limit — leave open, no close
-      continue;
-    }
-    // Resolve only on candles at/after the fill
-    const afterFill = future.slice(fillIdx);
-    // Mark fill once (idempotent note in confluences is optional)
-
     let oneR = Math.abs(entryPrice - originalSL);
     // Reject microscopic stops (bad tick / bad SL) that produce 1000R+ glitches
     const minRisk = Math.max(entryPrice * 0.00015, isIndex(pair) || isGold(pair) || isCrypto(pair) ? 5 : 0);
@@ -3207,7 +2521,7 @@ async function resolveOpenTrades(
       return Math.max(-2, Math.min(12, r));
     };
 
-    for (const c of afterFill) {
+    for (const c of future) {
       // Skip candles before TP1 already recorded
       if (tp1HitAt && c.time <= tp1HitAt) continue;
 
@@ -3266,16 +2580,10 @@ async function resolveOpenTrades(
         }
       }
 
-      // Soft buffer after TP1: −0.2R (slightly in profit) to +0.1R (tiny give-back).
-      // Exact BE is only applied after LTF structure confirmation (see below).
-      const softBeBuffer = oneR * 0.05; // midpoint of −0.2R…+0.1R band ≈ small cushion
-      const softBeSL = isBuy
-        ? entryPrice - oneR * 0.05   // −0.05R (tiny give-back side of the band)
-        : entryPrice + oneR * 0.05;
       const activeSL = protectionActive && protectedStop != null
         ? protectedStop
         : tp1Hit
-          ? softBeSL
+          ? entryPrice
           : originalSL;
       const hitSL = isBuy ? c.low <= activeSL : c.high >= activeSL;
 
@@ -3415,6 +2723,65 @@ function correlationGroup(pair: string): string {
 }
 
 // Save a freshly detected signal to the trade book (idempotent on pair+timestamp).
+
+// ---- Self-learning (Level 1): soft scores from last 30 days paper book ----
+type PairLearnScore = { trades: number; wins: number; netR: number; winRate: number };
+
+async function loadPairLearningScores(): Promise<Map<string, PairLearnScore>> {
+  const map = new Map<string, PairLearnScore>();
+  try {
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await db
+      .from("trades")
+      .select("pair, status, entry, stop_loss, close_price, risk_reward, initial_stop_loss")
+      .in("status", ["win", "loss"])
+      .gte("closed_at", since)
+      .limit(500);
+    if (error || !data) return map;
+
+    for (const t of data) {
+      const pair = t.pair as string;
+      const entry = Number(t.entry);
+      const sl = Number(t.initial_stop_loss ?? t.stop_loss);
+      const oneR = Math.abs(entry - sl);
+      let r = 0;
+      if (t.status === "loss") r = -1;
+      else if (t.close_price != null && oneR > 0) {
+        const cp = Number(t.close_price);
+        const isBuy = true; // direction not always needed if risk_reward stored
+        // Prefer stored risk_reward on wins when plausible
+        const stored = Number(t.risk_reward);
+        if (Number.isFinite(stored) && stored > 0 && stored <= 8) r = stored;
+        else r = Math.min(8, Math.abs(cp - entry) / oneR);
+      } else {
+        r = Math.min(8, Number(t.risk_reward) || 1);
+      }
+      if (t.status === "loss") r = -1;
+
+      const cur = map.get(pair) ?? { trades: 0, wins: 0, netR: 0, winRate: 0 };
+      cur.trades += 1;
+      if (t.status === "win") cur.wins += 1;
+      cur.netR += r;
+      cur.winRate = cur.trades ? (cur.wins / cur.trades) * 100 : 0;
+      map.set(pair, cur);
+    }
+  } catch (e) {
+    console.warn("learning scores load failed", e);
+  }
+  return map;
+}
+
+/** Adjust confidence from paper history. Returns penalty points (positive = worse). */
+function learningPenalty(pair: string, scores: Map<string, PairLearnScore>): number {
+  const s = scores.get(pair);
+  if (!s || s.trades < 5) return 0; // not enough data
+  // Soft demote chronic losers; never hard-block (user can still see developing)
+  if (s.netR <= -3 && s.winRate < 40) return 12;
+  if (s.netR <= -1.5 && s.winRate < 45) return 6;
+  if (s.netR >= 4 && s.winRate >= 55) return -4; // small boost
+  return 0;
+}
+
 async function saveSignalToBook(s: Signal): Promise<void> {
   const { data: existing } = await db
     .from("trades")
@@ -3486,18 +2853,6 @@ async function saveSignalToBook(s: Signal): Promise<void> {
     return;
   }
 
-  // Enrich confluences with machine-readable feature tags for expectancy analysis
-  const featureTags = [
-    `grade:${grade}`,
-    `model:${(s as Signal).entryModel ?? "OB"}`,
-    `style:${(s as Signal).signalStyle ?? "swing"}`,
-    `struct_tf:${(s as Signal).structureTimeframe ?? "4H"}`,
-    `entry_tf:${(s as Signal).entryTimeframe ?? "15M"}`,
-    `rr:${Number(s.riskReward).toFixed(2)}`,
-    `conf:${s.confidence}`,
-  ];
-  const enrichedConfluences = [...(s.confluences ?? []), ...featureTags];
-
   const { data: inserted, error } = await db.from("trades").insert({
     pair: s.pair,
     direction: s.direction,
@@ -3509,49 +2864,20 @@ async function saveSignalToBook(s: Signal): Promise<void> {
     confidence: s.confidence,
     structure: s.structure,
     htf_bias: s.htf_bias,
-    confluences: enrichedConfluences,
+    confluences: s.confluences,
     status: "open",
     signal_timestamp: s.timestamp,
     initial_stop_loss: s.stopLoss,
   }).select("id").single();
-
-  // Best-effort feature log for expectancy research (table may not exist yet)
-  if (inserted?.id) {
-    try {
-      await db.from("signal_features").insert({
-        trade_id: inserted.id,
-        pair: s.pair,
-        direction: s.direction,
-        grade,
-        entry_model: (s as Signal).entryModel ?? "OB",
-        signal_style: (s as Signal).signalStyle ?? "swing",
-        structure_tf: (s as Signal).structureTimeframe ?? "4H",
-        entry_tf: (s as Signal).entryTimeframe ?? "15M",
-        confidence: s.confidence,
-        risk_reward: Number(s.riskReward) || 0,
-        htf_bias: s.htf_bias,
-        structure: s.structure,
-        has_sweep: (s.confluences ?? []).some((c) => /liquidity sweep|stop hunt/i.test(c)),
-        session_tag: (s.confluences ?? []).find((c) => /London|NewYork|kill/i.test(c)) ?? null,
-        confluences: s.confluences,
-        confidence_breakdown: (s as Signal).confidenceBreakdown ?? null,
-      });
-    } catch (featErr) {
-      console.warn("signal_features log skipped:", featErr instanceof Error ? featErr.message : featErr);
-    }
-  }
 
   if (error || !inserted) {
     console.error("Could not save trade signal:", error?.message ?? "unknown error");
     return;
   }
 
-  const isIct = s.strategyModel === "ict_silver_bullet" || s.signalStyle === "ict_sb";
   await sendTradePush(
-    isIct
-      ? `ICT SB limit armed · ${s.pair} ${s.direction}`
-      : `Jaggy limit armed · ${s.pair} ${s.direction}`,
-    `Limit ${s.entry} · SL ${s.stopLoss} · TP1 ${s.takeProfit} · TP2 ${s.takeProfit2} · triggers when price hits entry`,
+    `Trade entered · ${s.pair} ${s.direction}`,
+    `Entry ${s.entry} · SL ${s.stopLoss} · TP1 ${s.takeProfit} · TP2 ${s.takeProfit2} · ${s.confidence}% confidence`,
     inserted.id,
   );
 }
@@ -3603,34 +2929,6 @@ Deno.serve(async (req) => {
     }
   }
 
-  // Optional: clear entire trade book so user can monitor strategy from a clean slate
-  try {
-    const raw = await req.text();
-    if (raw) {
-      const body = JSON.parse(raw) as { clearTradeBook?: boolean };
-      if (body.clearTradeBook === true) {
-        const { error: delFeat } = await db.from("signal_features").delete().neq("id", "00000000-0000-0000-0000-000000000000");
-        if (delFeat) console.warn("signal_features clear:", delFeat.message);
-        const { error: delTrades, count } = await db
-          .from("trades")
-          .delete({ count: "exact" })
-          .neq("id", "00000000-0000-0000-0000-000000000000");
-        if (delTrades) {
-          return new Response(JSON.stringify({ error: delTrades.message }), {
-            status: 500,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-        }
-        return new Response(
-          JSON.stringify({ cleared: true, message: "Trade book cleared — ready to monitor Jaggy + ICT SB" }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        );
-      }
-    }
-  } catch {
-    // no body or invalid JSON — normal scan
-  }
-
   const results: {
     signals: Signal[];
     developing: DevelopingSetup[];
@@ -3647,6 +2945,7 @@ Deno.serve(async (req) => {
 
   // Hot list: eligible pairs with an open paper trade (Twelve Data preferred)
   const hotTwelve = await loadHotTwelvePairs();
+  const learnScores = await loadPairLearningScores();
   const twelveUsed: string[] = [];
 
   // Process pairs in small batches — full parallel (36×3 Yahoo calls) triggers 429.
@@ -3718,32 +3017,49 @@ Deno.serve(async (req) => {
       }
 
       const signals: Signal[] = [];
-      // Primary: Jaggy swing
       if (signal) {
-        signal.signalStyle = "swing";
-        signal.strategyModel = "thissdax"; // internal id; UI shows Jaggy
-        signal.entryTrigger = signal.entryTrigger ?? "LIMIT";
+        const pen = learningPenalty(pair, learnScores);
+        if (pen !== 0) {
+          signal = {
+            ...signal,
+            confidence: Math.max(20, Math.min(98, signal.confidence - pen)),
+            confluences: [
+              ...signal.confluences,
+              pen > 0
+                ? `Self-learn: soft demote (${learnScores.get(pair)?.trades ?? 0} trades · ${learnScores.get(pair)?.winRate.toFixed(0) ?? "?"}% WR · net ${learnScores.get(pair)?.netR.toFixed(1) ?? "?"}R)`
+                : `Self-learn: mild boost from strong paper history`,
+            ],
+          };
+          // Re-grade if confidence dropped below A+ band
+          if (signal.confidence < 78 && signal.setupGrade === "A+") {
+            signal = { ...signal, setupGrade: "B" };
+          }
+        }
+        const ls = learnScores.get(pair);
+        if (ls && ls.trades >= 5) {
+          signal = {
+            ...signal,
+            confluences: [
+              ...signal.confluences,
+              `Book 30d: ${ls.trades} trades · ${ls.winRate.toFixed(0)}% WR · net ${ls.netR >= 0 ? "+" : ""}${ls.netR.toFixed(1)}R`,
+            ],
+          };
+        }
         signals.push(signal);
         await saveSignalToBook(signal);
       }
 
-      // Parallel: ICT Silver Bullet (always labeled ICT — user can arm to test)
-      try {
-        const sbTf =
+      // Gold scalp path: 1H trend + 5M BOS
+      if (isGold(pair)) {
+        const fiveMin =
           entryInterval === "5m" && entryTf.length >= 40
             ? entryTf
-            : await fetchCandles(pair, "5m", "5d", useTwelve || nearEntry);
-        const sb = await analyzeSilverBullet(
-          pair,
-          sbTf.length >= 40 ? sbTf : entryTf.length >= 40 ? entryTf : hourly,
-          daily,
-        );
-        if (sb) {
-          signals.push(sb);
-          await saveSignalToBook(sb);
+            : await fetchCandles(pair, "5m", "1mo", useTwelve || nearEntry);
+        const scalp = await analyzeGoldScalp(pair, hourly, fiveMin);
+        if (scalp) {
+          signals.push(scalp);
+          await saveSignalToBook(scalp);
         }
-      } catch (sbErr) {
-        console.warn("ICT SB skip", pair, sbErr instanceof Error ? sbErr.message : sbErr);
       }
 
       return { pair, signals, developing, resolved, dataSource: useTwelve ? "twelve" : "yahoo" };
@@ -3775,15 +3091,6 @@ Deno.serve(async (req) => {
   }
 
   results.signals.sort((a, b) => b.confidence - a.confidence);
-  // Keep Thissdax swing + ICT Silver Bullet only
-  results.signals = results.signals.filter(
-    (s) => (s.signalStyle ?? "swing") === "swing" || s.signalStyle === "ict_sb",
-  );
-  (results as Record<string, unknown>).strategyMode = "jaggy + ict_silver_bullet";
-  (results as Record<string, unknown>).strategyRules = [
-    "Jaggy swing: sweep+BOS · Fib P/D · ranked POI · limit fills on touch · 2R/4R",
-    "ICT SB (parallel): NY windows 03-04 / 10-11 / 14-15 · FVG limit · testable",
-  ];
   results.developing.sort((a, b) => b.proximity - a.proximity);
   // Attach feed meta for debugging (ignored by UI if unused)
   (results as Record<string, unknown>).twelveDataEnabled = Boolean(TWELVE_DATA_API_KEY);

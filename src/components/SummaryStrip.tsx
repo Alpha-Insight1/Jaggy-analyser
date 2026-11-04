@@ -57,8 +57,8 @@ export const SummaryStrip = ({ signals, developing, scanned, failed, loading }: 
     {
       icon: Activity,
       label: "Desk mode",
-      value: "Jaggy",
-      sub: "Swing · limit on touch",
+      value: "SMC",
+      sub: "Multi-TF · Path A/B",
       highlight: true,
       gold: true,
     },

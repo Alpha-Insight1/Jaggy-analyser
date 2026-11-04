@@ -5,7 +5,6 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { RiskCalculator } from "./RiskCalculator";
-import { TradeActionBanner, approachAlertPrice, type ActionMode } from "@/components/TradeActionBanner";
 
 export interface ConfidenceFactor {
   label: string;
@@ -28,13 +27,9 @@ export interface Signal {
   currentPrice: number;
   timestamp: string;
   htf_bias: "Bullish" | "Bearish" | "Neutral";
-  ltfEntry?: number;
-  ltfStopLoss?: number;
   swingEntry?: number;
   swingStopLoss?: number;
   swingRiskPips?: number;
-  swingInvalidated?: boolean;
-  swingInvalidReason?: string;
   splitEntry?: {
     tier1: number;
     tier2: number;
@@ -45,21 +40,12 @@ export interface Signal {
   ltfConfirmed?: boolean;
   awaitingLtfConfirmation?: boolean;
   autoTrigger?: boolean;
-  strategyModel?: "thissdax" | "ict_silver_bullet";
-  ictWindow?: "London" | "NY_AM" | "NY_PM";
-  ictWindowLabel?: string;
-  signalStyle?: "swing" | "scalp" | "ict_sb";
-  poiType?: "order_block" | "structural_origin";
-  poiLabel?: string;
-  poiScore?: number;
-  poiZone?: { top: number; bottom: number };
   entryModel?: "OTE" | "FVG" | "Breaker" | "Judas" | "OB";
   entryTrigger?: "MARKET_ON_CONFIRMATION" | "LIMIT";
   entryZone?: { top: number; bottom: number };
   signalStyle?: "swing" | "scalp";
   structureTimeframe?: string;
   entryTimeframe?: string;
-  setupGrade?: "A+" | "B";
 }
 
 
@@ -119,12 +105,12 @@ export const SignalCard = ({ signal, index }: { signal: Signal; index: number })
   return (
     <div
       className={cn(
-        "fade-in-up group relative overflow-hidden rounded-lg border border-border/70 surface-1 p-5 shadow-card transition-smooth hover:-translate-y-0.5",
+        "fade-in-up group relative overflow-hidden rounded-xl border surface-1 p-5 shadow-card-elev transition-smooth hover:-translate-y-0.5",
         isScalp
-          ? "border-primary/40 ring-1 ring-primary/15"
+          ? "border-gold/50 ring-1 ring-gold/20"
           : isBuy
-            ? "card-rail-bull border-bull/25 hover:shadow-bull"
-            : "card-rail-bear border-bear/25 hover:shadow-bear"
+            ? "border-bull/30 hover:shadow-bull"
+            : "border-bear/30 hover:shadow-bear"
       )}
       style={{ animationDelay: `${index * 60}ms` }}
     >
@@ -145,35 +131,17 @@ export const SignalCard = ({ signal, index }: { signal: Signal; index: number })
             >
               {signal.structure}
             </Badge>
-            {signal.strategyModel === "ict_silver_bullet" || signal.signalStyle === "ict_sb" ? (
-              <>
-                <Badge className="h-5 border-amber-500/50 bg-amber-500/20 text-[10px] font-bold uppercase text-amber-400">
-                  ICT · Silver Bullet
-                </Badge>
-                {signal.ictWindowLabel && (
-                  <Badge variant="outline" className="h-5 border-amber-500/30 text-[10px] text-amber-200/90">
-                    {signal.ictWindowLabel}
-                  </Badge>
-                )}
-                <Badge variant="outline" className="h-5 border-border/70 text-[10px]">
-                  Test · arm limit
-                </Badge>
-              </>
+            {signal.signalStyle === "scalp" ? (
+              <Badge className="h-5 bg-gold/20 text-gold border-gold/40 text-[10px] font-bold uppercase">
+                Scalp
+              </Badge>
             ) : (
-              <>
-                <Badge className="h-5 border-primary/40 bg-primary/15 text-[10px] font-bold uppercase text-primary">
-                  Jaggy
-                </Badge>
-                {signal.poiLabel && (
-                  <Badge
-                    variant="outline"
-                    className="h-5 border-border/70 bg-secondary text-[10px] font-medium"
-                  >
-                    POI · {signal.poiType === "structural_origin" ? "Structural" : "Order block"}
-                    {signal.poiScore != null ? ` · ${signal.poiScore}` : ""}
-                  </Badge>
-                )}
-              </>
+              <Badge
+                variant="outline"
+                className="h-5 border-border/60 bg-secondary text-[10px] font-medium uppercase"
+              >
+                Swing
+              </Badge>
             )}
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">
@@ -199,70 +167,21 @@ export const SignalCard = ({ signal, index }: { signal: Signal; index: number })
           {signal.direction}
       </div>
 
-      <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        {signal.setupGrade && (
-          <span
-            className={cn(
-              "inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider",
-              signal.setupGrade === "A+"
-                ? "border-bull/40 bg-bull/10 text-bull"
-                : "border-border bg-muted/40 text-muted-foreground",
-            )}
-          >
-            Grade {signal.setupGrade}
-            {signal.setupGrade === "A+" ? " · auto-book" : " · watch"}
+      {signal.entryModel && (
+        <div className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-gold/40 bg-gold/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-gold">
+          <Activity className="h-3 w-3" />
+          {signal.entryModel === "OTE" && "OTE · 61.8–79% fib"}
+          {signal.entryModel === "FVG" && "FVG mitigation"}
+          {signal.entryModel === "Breaker" && "Breaker block flip"}
+          {signal.entryModel === "Judas" && "Judas sweep + CHoCH"}
+          {signal.entryModel === "OB" && "Order block · 50% mean threshold"}
+          <span className="text-muted-foreground">
+            · Market on {signal.entryTimeframe ?? "LTF"} confirmation
           </span>
-        )}
-        {signal.entryModel && (
-          <div className="inline-flex items-center gap-1.5 rounded-md border border-gold/40 bg-gold/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-gold">
-            <Activity className="h-3 w-3" />
-            {signal.entryModel === "OTE" && "OTE · 61.8–79% fib"}
-            {signal.entryModel === "FVG" && "FVG mitigation"}
-            {signal.entryModel === "Breaker" && "Breaker block flip"}
-            {signal.entryModel === "Judas" && "Judas sweep + CHoCH"}
-            {signal.entryModel === "OB" && "Order block · 50% mean"}
-            <span className="text-muted-foreground font-medium normal-case tracking-normal">
-              · on {signal.entryTimeframe ?? "LTF"} confirm
-            </span>
-          </div>
-        )}
-      </div>
-
-      </div>
-
-      <TradeActionBanner
-        mode={((): ActionMode => {
-          if (signal.swingInvalidated) return "watch_only";
-          if (signal.setupGrade === "B") return "watch_only";
-          // Swing book: limit at Daily zone
-          if (signal.entryTrigger === "LIMIT" || signal.signalStyle === "swing") return "arm_limit";
-          if (signal.autoTrigger) return "auto_fire";
-          if (signal.awaitingLtfConfirmation || signal.entryTrigger === "MARKET_ON_CONFIRMATION") {
-            return "wait_confirm";
-          }
-          return "arm_limit";
-        })()}
-        pair={signal.pair}
-        direction={signal.direction}
-        alertPrice={approachAlertPrice(signal.direction, signal.entry, signal.currentPrice)}
-        limitPrice={signal.entry}
-        stopLoss={signal.stopLoss}
-        takeProfit={signal.takeProfit}
-        entryTimeframe={signal.entryTimeframe}
-      />
-
-      {signal.ltfEntry != null && (
-        <div className="mt-2 rounded-md border border-border/50 bg-muted/20 px-2.5 py-1.5 text-[10px] text-muted-foreground">
-          LTF context (not the live order): entry{" "}
-          <span className="font-mono text-foreground/80">{signal.ltfEntry}</span>
-          {signal.ltfStopLoss != null && (
-            <>
-              {" · "}SL <span className="font-mono text-foreground/80">{signal.ltfStopLoss}</span>
-            </>
-          )}
-          {" · "}Arm limit at ranked <span className="text-primary font-semibold">POI</span> only (TP1 2R · TP2 4R)
         </div>
       )}
+
+      </div>
 
       <div className="mt-4">
         <ConfidenceBar value={signal.confidence} />
@@ -342,29 +261,72 @@ export const SignalCard = ({ signal, index }: { signal: Signal; index: number })
         )}
       </div>
 
-      {signal.swingEntry != null && (
-        <div className="mt-3 grid grid-cols-2 gap-3 rounded-lg border border-gold/40 bg-gold/5 p-3">
-          <Stat
-            label="Swing entry"
-            value={String(signal.swingEntry)}
-            icon={Target}
-            tone={isBuy ? "bull" : "bear"}
-          />
-          <Stat
-            label="Swing stop"
-            value={String(signal.swingStopLoss)}
-            icon={Shield}
-            tone="bear"
-          />
-          <div className="col-span-2 text-[10px] text-muted-foreground">
-            Deeper HTF discount/premium fill · Risk{" "}
-            <span className="font-mono text-foreground/80">
-              {signal.swingRiskPips}p
+      {/* Dual path: LTF (fast) vs Swing (patient) */}
+      <div className="mt-3 space-y-2">
+        <div className="rounded-lg border border-border/60 surface-2 p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+              Path A · LTF entry (faster)
             </span>
-            {" · "}Same TP1/TP2 targets
+            <span className="text-[9px] text-muted-foreground">
+              {signal.entryTimeframe ?? "15M/5M"} trigger
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-[11px]">
+            <div>
+              <p className="text-[9px] uppercase text-muted-foreground">Entry</p>
+              <p className="font-mono font-semibold">{signal.entry}</p>
+            </div>
+            <div>
+              <p className="text-[9px] uppercase text-muted-foreground">Stop</p>
+              <p className="font-mono font-semibold text-bear">{signal.stopLoss}</p>
+            </div>
+            <div>
+              <p className="text-[9px] uppercase text-muted-foreground">TP1</p>
+              <p className="font-mono font-semibold text-bull">{signal.takeProfit}</p>
+            </div>
           </div>
         </div>
-      )}
+
+        {signal.swingEntry != null ? (
+          <div className="rounded-lg border border-gold/50 bg-gold/5 p-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-gold">
+                Path B · Swing entry (patient)
+              </span>
+              <span className="rounded-md bg-gold/20 px-1.5 py-0.5 text-[9px] font-bold uppercase text-gold">
+                Limit style
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Stat
+                label="Swing entry"
+                value={String(signal.swingEntry)}
+                icon={Target}
+                tone={isBuy ? "bull" : "bear"}
+              />
+              <Stat
+                label="Swing stop"
+                value={String(signal.swingStopLoss)}
+                icon={Shield}
+                tone="bear"
+              />
+            </div>
+            <p className="mt-2 text-[10px] text-muted-foreground">
+              Deeper HTF zone (like a 4H/Daily blue line). Skip Path A if you only want this fill.
+              Risk{" "}
+              <span className="font-mono text-foreground/80">{signal.swingRiskPips}p</span>
+              {" · "}Same TP1/TP2. Invalidation beyond swing stop.
+            </p>
+          </div>
+        ) : (
+          signal.signalStyle !== "scalp" && (
+            <p className="rounded-md border border-border/40 px-2.5 py-2 text-[10px] text-muted-foreground">
+              No separate swing level — HTF zone is not deep enough vs LTF entry. Use Path A only.
+            </p>
+          )
+        )}
+      </div>
 
       {/* Split-entry smoothing block — scale in 50/50 across LTF + swing tiers */}
       {signal.splitEntry && (
@@ -546,7 +508,7 @@ const CopyMtBlock = ({ signal }: { signal: Signal }) => {
         <div className="flex items-center gap-2">
           <Copy className="h-4 w-4 text-muted-foreground" />
           <span className="text-xs font-bold uppercase tracking-wider text-foreground">
-            Swing order ticket
+            MetaTrader Order
           </span>
         </div>
         <Button

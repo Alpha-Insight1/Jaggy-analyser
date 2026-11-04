@@ -56,8 +56,8 @@ const Index = () => {
 
   const fireAlert = useCallback((s: Signal) => {
     const isBuy = s.direction === "BUY";
-    toast.success(`${s.strategyModel === "ict_silver_bullet" || s.signalStyle === "ict_sb" ? "ICT SB · " : "Jaggy · "}${s.direction} ${s.pair} · ${s.confidence}%`, {
-      description: `Limit ${s.entry} · fills on touch · SL ${s.stopLoss} · TP1 ${s.takeProfit}`,
+    toast.success(`${s.signalStyle === "scalp" ? "Scalp · " : "Swing · "}${s.direction} ${s.pair} · ${s.confidence}%`, {
+      description: `Entry ${s.entry} · SL ${s.stopLoss} · TP ${s.takeProfit}`,
       duration: 12000,
       icon: isBuy ? <ArrowUp className="h-4 w-4 text-bull" /> : <ArrowDown className="h-4 w-4 text-bear" />,
     });
@@ -137,10 +137,10 @@ const Index = () => {
             <BrandLogo size={40} withWordmark className="shrink-0" />
             <div className="hidden leading-tight min-w-0 border-l border-border/50 pl-3 sm:block">
               <p className="text-[11px] text-muted-foreground truncate">
-                Swing desk · Daily zone limits · Market structure
+                SMC multi-TF desk · Forex 15M · Indices/Gold 5M
               </p>
               <p className="text-[10px] text-muted-foreground/80 truncate">
-                TP1 2R · TP2 4R · LTF is context only
+                A+ auto-book · structure TP · dual path entry
               </p>
             </div>
           </div>
@@ -202,8 +202,8 @@ const Index = () => {
         <section className="mb-10">
           <SectionHeader
             icon={Activity}
-            title="Swing signals · ready to arm"
-            subtitle="Armed swing limits at the Daily zone — follow the action banner"
+            title="Active signals"
+            subtitle="Confirmed setups — follow entry model on each card"
             right={
               lastUpdated && (
                 <span className="font-mono">Updated {lastUpdated.toLocaleTimeString()}</span>
@@ -275,8 +275,8 @@ const Index = () => {
         <section className="mb-10">
           <SectionHeader
             icon={Radar}
-            title="Watchlist · not ready"
-            subtitle="Structure forming — alert only, never enter from this list"
+            title="Developing setups"
+            subtitle="Watchlist — forming structure, not full confirmation"
             right={
               <>
                 {newsCount > 0 && (

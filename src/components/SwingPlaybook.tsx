@@ -2,11 +2,7 @@ import { Bell, Crosshair, Flag, Ban, ChevronDown } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 
-/**
- * Always-visible swing desk rules so users know:
- * - this app only books swing setups
- * - when to alert vs place a limit vs stay out
- */
+/** How to use the SMC multi-TF Jaggy board (Path A LTF + Path B swing). */
 export function SwingPlaybook({ className }: { className?: string }) {
   const [open, setOpen] = useState(true);
 
@@ -14,25 +10,25 @@ export function SwingPlaybook({ className }: { className?: string }) {
     {
       icon: Bell,
       title: "1 · Watchlist",
-      body: "Developing cards = early structure. Set a price alert near the swing zone. Do not enter yet.",
+      body: "Developing cards = structure forming. Set alerts near the zone. Do not force entries.",
       tone: "gold" as const,
     },
     {
       icon: Crosshair,
-      title: "2 · Arm limit",
-      body: "Active signal = LIMIT at the ranked POI (Order Block or Structural origin). Never in the shallow liquidity grab. LTF is context only.",
+      title: "2 · Choose path",
+      body: "Path A = LTF entry (faster). Path B = deeper swing limit when shown. Prefer A+ grades.",
       tone: "bull" as const,
     },
     {
       icon: Flag,
       title: "3 · Manage",
-      body: "Stop beyond the Daily zone. Take partial at TP1 (2R). Leave a runner to TP2 (4R).",
+      body: "Use the ticket SL / TP1 / TP2. Partial at TP1 when available; trail or hold runner to TP2.",
       tone: "bull" as const,
     },
     {
       icon: Ban,
       title: "4 · Stay out",
-      body: "If the card says invalidated, counter-bias, or watch only — cancel limits. No chase.",
+      body: "Skip counter-bias, low confidence, or when the zone is already spent. No chase after the move.",
       tone: "bear" as const,
     },
   ];
@@ -51,13 +47,13 @@ export function SwingPlaybook({ className }: { className?: string }) {
       >
         <div className="min-w-0">
           <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
-            Swing desk only
+            Jaggy SMC desk
           </p>
           <p className="mt-0.5 text-sm font-semibold text-foreground">
-            Jaggy swing strategy · how to use this board
+            Multi-TF structure · how to use this board
           </p>
           <p className="mt-0.5 text-[11px] text-muted-foreground">
-            Jaggy rules: structure → liquidity → ranked POI · limit fills on touch
+            Daily bias + 4H structure · Forex 15M / Indices &amp; Gold 5M · optional gold scalp
           </p>
         </div>
         <ChevronDown
@@ -99,8 +95,7 @@ export function SwingPlaybook({ className }: { className?: string }) {
             ))}
           </div>
           <p className="mt-3 text-[10px] text-muted-foreground">
-            Structure first (sweep + BOS) · Fib value area · session filter · no LTF scalps ·
-            ICT Silver Bullet may appear as a parallel amber card — arm limit to test that model. Educational analysis only, not financial advice.
+            A+ auto-book · structure TPs · session filters · educational analysis only, not financial advice.
           </p>
         </div>
       )}
