@@ -2,6 +2,7 @@ import { ArrowDown, ArrowUp, Target, Shield, TrendingUp, Activity, Check, X, Che
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
+import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { RiskCalculator } from "./RiskCalculator";
@@ -241,7 +242,7 @@ export const SignalCard = ({ signal, index }: { signal: Signal; index: number })
       </div>
 
       <div className="mt-4 grid grid-cols-2 gap-3 rounded-lg surface-2 p-3">
-        <Stat label="LTF entry" value={String(signal.entry)} icon={Activity} />
+        <Stat label="Entry" value={String(signal.entry)} icon={Activity} />
         <Stat label="Stop" value={String(signal.stopLoss)} icon={Shield} tone="bear" />
         <Stat
           label={`TP1 (${(Math.abs(signal.takeProfit - signal.entry) / Math.abs(signal.entry - signal.stopLoss)).toFixed(1)}R)`}
@@ -261,7 +262,72 @@ export const SignalCard = ({ signal, index }: { signal: Signal; index: number })
         )}
       </div>
 
-      
+      {/* Dual path: LTF (fast) vs Swing (patient) */}
+      <div className="mt-3 space-y-2">
+        <div className="rounded-lg border border-border/60 surface-2 p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+              Path A · LTF entry (faster)
+            </span>
+            <span className="text-[9px] text-muted-foreground">
+              {signal.entryTimeframe ?? "15M/5M"} trigger
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-[11px]">
+            <div>
+              <p className="text-[9px] uppercase text-muted-foreground">Entry</p>
+              <p className="font-mono font-semibold">{signal.entry}</p>
+            </div>
+            <div>
+              <p className="text-[9px] uppercase text-muted-foreground">Stop</p>
+              <p className="font-mono font-semibold text-bear">{signal.stopLoss}</p>
+            </div>
+            <div>
+              <p className="text-[9px] uppercase text-muted-foreground">TP1</p>
+              <p className="font-mono font-semibold text-bull">{signal.takeProfit}</p>
+            </div>
+          </div>
+        </div>
+
+        {signal.swingEntry != null ? (
+          <div className="rounded-lg border border-gold/50 bg-gold/5 p-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-gold">
+                Path B · Swing entry (patient)
+              </span>
+              <span className="rounded-md bg-gold/20 px-1.5 py-0.5 text-[9px] font-bold uppercase text-gold">
+                Limit style
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Stat
+                label="Swing entry"
+                value={String(signal.swingEntry)}
+                icon={Target}
+                tone={isBuy ? "bull" : "bear"}
+              />
+              <Stat
+                label="Swing stop"
+                value={String(signal.swingStopLoss)}
+                icon={Shield}
+                tone="bear"
+              />
+            </div>
+            <p className="mt-2 text-[10px] text-muted-foreground">
+              Deeper HTF zone (like a 4H/Daily blue line). Skip Path A if you only want this fill.
+              Risk{" "}
+              <span className="font-mono text-foreground/80">{signal.swingRiskPips}p</span>
+              {" · "}Same TP1/TP2. Invalidation beyond swing stop.
+            </p>
+          </div>
+        ) : (
+          signal.signalStyle !== "scalp" && (
+            <p className="rounded-md border border-border/40 px-2.5 py-2 text-[10px] text-muted-foreground">
+              No separate swing level — HTF zone is not deep enough vs LTF entry. Use Path A only.
+            </p>
+          )
+        )}
+      </div>
 
       {/* Split-entry smoothing block — scale in 50/50 across LTF + swing tiers */}
       {signal.splitEntry && (
@@ -327,41 +393,6 @@ export const SignalCard = ({ signal, index }: { signal: Signal; index: number })
 
 
 
-      <div className="mt-3 rounded-lg border border-gold/40 bg-gold/5 p-3">
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-gold">
-            DAX swing · display only
-          </span>
-          <span className="rounded-md bg-gold/15 px-1.5 py-0.5 text-[9px] font-bold uppercase text-gold">
-            HTF zone
-          </span>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Stat
-            label="Swing entry"
-            value={String(signal.swingEntry ?? signal.entry)}
-            icon={Target}
-            tone={isBuy ? "bull" : "bear"}
-          />
-          <Stat
-            label="Swing stop"
-            value={String(signal.swingStopLoss ?? signal.stopLoss)}
-            icon={Shield}
-            tone="bear"
-          />
-        </div>
-        <p className="mt-2 text-[10px] text-muted-foreground">
-          DAX structure + Fib zone. Live book still triggers on{" "}
-          <span className="font-semibold text-foreground/85">LTF entry</span> above.
-          {signal.swingRiskPips != null && (
-            <>
-              {" · "}Risk{" "}
-              <span className="font-mono text-foreground/80">{signal.swingRiskPips}p</span>
-            </>
-          )}
-        </p>
-      </div>
-
       <RiskCalculator
         pair={signal.pair}
         direction={signal.direction}
@@ -372,6 +403,8 @@ export const SignalCard = ({ signal, index }: { signal: Signal; index: number })
       />
 
       <CopyMtBlock signal={signal} />
+
+      <DemoLogPanel signal={signal} />
 
       <div className="mt-3 flex items-center justify-between text-xs">
         <span className="text-muted-foreground">
@@ -425,7 +458,7 @@ const CopyMtBlock = ({ signal }: { signal: Signal }) => {
     : (signal.direction === "BUY" ? "BUY LIMIT" : "SELL LIMIT");
   const isBuy = signal.direction === "BUY";
 
-  const hasSplit = false; // single ticket only — prefer swing levels when present
+  const hasSplit = !!signal.splitEntry;
   const tier1Price = hasSplit ? signal.splitEntry!.tier1 : signal.entry;
   const tier2Price = hasSplit ? signal.splitEntry!.tier2 : null;
   const ticket = hasSplit
@@ -501,7 +534,7 @@ const CopyMtBlock = ({ signal }: { signal: Signal }) => {
           </>
         ) : (
           <>
-            <CopyField label="LTF Entry" value={signal.entry} onCopy={copy} />
+            <CopyField label="Entry" value={signal.entry} onCopy={copy} />
             <CopyField label="SL" value={signal.stopLoss} onCopy={copy} />
           </>
         )}
@@ -537,3 +570,127 @@ const CopyField = ({
     </span>
   </button>
 );
+
+
+/** One-tap demo book logging — Path A (LTF) or Path B (swing). Auto-resolve still closes on scan. */
+function DemoLogPanel({ signal }: { signal: Signal }) {
+  const [busy, setBusy] = useState<"a" | "b" | null>(null);
+  const [done, setDone] = useState<"a" | "b" | null>(null);
+
+  const logPath = async (path: "a" | "b") => {
+    if (busy) return;
+    setBusy(path);
+    try {
+      const useSwing = path === "b" && signal.swingEntry != null;
+      if (path === "b" && signal.swingEntry == null) {
+        toast.error("No swing entry on this signal", {
+          description: "Use Path A (LTF) or wait for a deeper HTF zone.",
+        });
+        setBusy(null);
+        return;
+      }
+      const entry = useSwing ? signal.swingEntry! : signal.entry;
+      const stopLoss = useSwing ? (signal.swingStopLoss ?? signal.stopLoss) : signal.stopLoss;
+      const risk = Math.abs(entry - stopLoss);
+      const rr =
+        risk > 0 ? Math.min(8, Math.abs(signal.takeProfit - entry) / risk) : signal.riskReward;
+
+      const { data: openSame } = await supabase
+        .from("trades")
+        .select("id")
+        .eq("pair", signal.pair)
+        .eq("status", "open")
+        .limit(1);
+      if (openSame && openSame.length > 0) {
+        toast.error("Already an open trade on this pair", {
+          description: "Close or skip it in Trade Book first.",
+        });
+        setBusy(null);
+        return;
+      }
+
+      const { error } = await supabase.from("trades").insert({
+        pair: signal.pair,
+        direction: signal.direction,
+        entry,
+        stop_loss: stopLoss,
+        take_profit: signal.takeProfit,
+        take_profit_2: signal.takeProfit2 ?? null,
+        risk_reward: Number(rr.toFixed(2)),
+        confidence: signal.confidence,
+        structure: signal.structure,
+        htf_bias: signal.htf_bias,
+        confluences: [
+          ...(signal.confluences ?? []),
+          useSwing ? "Demo log · Path B (swing)" : "Demo log · Path A (LTF)",
+        ],
+        status: "open",
+        signal_timestamp: signal.timestamp,
+        initial_stop_loss: stopLoss,
+      });
+
+      if (error) {
+        toast.error("Could not log demo trade", {
+          description: error.message.includes("policy")
+            ? "Check Supabase RLS INSERT policy on trades."
+            : error.message,
+        });
+        setBusy(null);
+        return;
+      }
+      setDone(path);
+      toast.success(
+        useSwing ? "Demo trade logged · Path B (swing)" : "Demo trade logged · Path A (LTF)",
+        {
+          description: `${signal.pair} ${signal.direction} @ ${entry} · SL ${stopLoss}. Close auto-updates on scan when SL/TP hits.`,
+        },
+      );
+    } catch (e) {
+      toast.error("Log failed", {
+        description: e instanceof Error ? e.message : "Unknown error",
+      });
+    }
+    setBusy(null);
+  };
+
+  return (
+    <div className="mt-3 rounded-lg border border-border/60 surface-2 p-3">
+      <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+        Demo trade log
+      </p>
+      <p className="mt-1 text-[10px] text-muted-foreground">
+        Place the same order on your broker demo, then tap below so Jaggy tracks R automatically
+        (SL/TP closes on the next scans).
+      </p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          disabled={!!busy || done === "a"}
+          className="text-xs"
+          onClick={() => void logPath("a")}
+        >
+          {busy === "a" ? "Logging…" : done === "a" ? "Path A logged" : "Log Path A (LTF)"}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          disabled={!!busy || done === "b" || signal.swingEntry == null}
+          className="text-xs border-gold/40"
+          onClick={() => void logPath("b")}
+        >
+          {busy === "b"
+            ? "Logging…"
+            : done === "b"
+              ? "Path B logged"
+              : signal.swingEntry == null
+                ? "No swing path"
+                : "Log Path B (swing)"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+

@@ -16,7 +16,6 @@ interface Trade {
   confidence: number;
   structure: string;
   status: "open" | "win" | "loss";
-  // open = limit armed or in trade; engine fills when price hits entry
   opened_at: string;
   closed_at: string | null;
   close_price: number | null;
@@ -156,38 +155,6 @@ export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
     [actingId, refreshTrades],
   );
 
-
-  const clearBook = useCallback(async () => {
-    if (actingId) return;
-    if (
-      !confirm(
-        "Clear the entire trade book? This deletes all open and closed trades so you can monitor Jaggy + ICT from a clean slate.",
-      )
-    )
-      return;
-    setActingId("clear");
-    const { data, error } = await supabase.functions.invoke("forex-analysis", {
-      body: { clearTradeBook: true },
-    });
-    setActingId(null);
-    if (error) {
-      toast.error("Could not clear trade book", { description: error.message });
-      return;
-    }
-    // Fallback: client-side delete if edge returns but RLS allows
-    if (!(data as { cleared?: boolean })?.cleared) {
-      const { error: e2 } = await supabase.from("trades").delete().neq("id", "00000000-0000-0000-0000-000000000000");
-      if (e2) {
-        toast.error("Could not clear trades", { description: e2.message });
-        return;
-      }
-    }
-    toast.success("Trade book cleared", {
-      description: "Monitoring starts fresh for Jaggy + ICT Silver Bullet",
-    });
-    void refreshTrades();
-  }, [actingId, refreshTrades]);
-
   useEffect(() => {
     refreshTrades();
 
@@ -289,15 +256,7 @@ export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3 border-b border-border/50 pb-3">
         <div className="flex items-center gap-3">
           <div className="flex h-8 w-8 items-center justify-center rounded-md border border-border/60 surface-2">
-            <button
-          type="button"
-          onClick={() => void clearBook()}
-          disabled={actingId === "clear"}
-          className="mr-2 rounded-md border border-border/60 px-2 py-1 text-[10px] uppercase tracking-wide text-muted-foreground hover:border-bear/40 hover:text-bear disabled:opacity-50"
-        >
-          {actingId === "clear" ? "Clearing…" : "Clear book"}
-        </button>
-        <BookOpen className="h-4 w-4 text-gold" />
+            <BookOpen className="h-4 w-4 text-gold" />
           </div>
           <div>
             <h2 className="text-sm font-semibold tracking-tight">Trade book</h2>
@@ -326,7 +285,7 @@ export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
       )}
       {open > 0 && (
         <p className="mb-3 text-[11px] text-muted-foreground">
-          Tip: <span className="text-foreground">Close at market</span> uses the last scanned price. If close fails, run the trades UPDATE SQL in Supabase.
+          Tip: Scans <span className="text-foreground">auto-close</span> when price hits SL/TP (demo log). Use <span className="text-foreground">Close at market</span> only to force a manual exit.
         </p>
       )}
 
@@ -334,10 +293,10 @@ export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
       <div
         className={
           closed.length === 0
-            ? "mb-4 rounded-lg border border-border/60 surface-1 p-5"
+            ? "mb-4 rounded-xl border border-border/60 surface-1 p-5"
             : totalR >= 0
-              ? "mb-4 rounded-lg border border-bull/40 bg-bull/5 p-5 ring-1 ring-bull/15"
-              : "mb-4 rounded-lg border border-bear/40 bg-bear/5 p-5 ring-1 ring-bear/15"
+              ? "mb-4 rounded-xl border border-bull/40 bg-bull/5 p-5 ring-1 ring-bull/15"
+              : "mb-4 rounded-xl border border-bear/40 bg-bear/5 p-5 ring-1 ring-bear/15"
         }
       >
         <div className="flex flex-wrap items-end justify-between gap-4">
@@ -384,8 +343,8 @@ export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
       <div
         className={
           openTrades.length > 0
-            ? "overflow-hidden rounded-lg border border-bull/30 surface-1 ring-1 ring-bull/10"
-            : "overflow-hidden rounded-lg border border-border/60 surface-1"
+            ? "overflow-hidden rounded-xl border border-bull/30 surface-1 ring-1 ring-bull/10"
+            : "overflow-hidden rounded-xl border border-border/60 surface-1"
         }
       >
         <div className="flex items-center justify-between border-b border-border/50 surface-2 px-4 py-2.5">
@@ -622,7 +581,7 @@ export const TradeBook = ({ priceMap = {} }: TradeBookProps) => {
       </div>
 
       {closed.length > 0 && (
-        <div className="mt-4 rounded-lg border border-border/60 surface-1 p-4">
+        <div className="mt-4 rounded-xl border border-border/60 surface-1 p-4">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Recent closures
@@ -734,7 +693,7 @@ const Stat = ({
   value: string;
   tone: "bull" | "bear" | "gold";
 }) => (
-  <div className="rounded-lg border border-border/60 surface-1 p-4 shadow-card">
+  <div className="rounded-xl border border-border/60 surface-1 p-4 shadow-card-elev">
     <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
     <p
       className={cn(
